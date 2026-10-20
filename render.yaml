@@ -1,0 +1,51 @@
+services:
+  - type: web
+    name: telegram-bet-bot
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: PORT
+        value: 10000
+      - key: TIMEZONE
+        value: Africa/Lagos
+      - key: DAILY_BRIEFING_TIME
+        value: "10:30"
+      - key: DEFAULT_INITIAL_STAKE
+        value: "500.0"
+      - key: DEFAULT_CURRENCY
+        value: NGN
+      - key: TARGET_DAILY_ODDS
+        value: "1.55"
+      - key: MIN_LEG_ODDS
+        value: "1.200"
+      - key: MAX_LEG_ODDS
+        value: "1.590"
+      - key: MIN_COMBINED_ODDS
+        value: "1.500"
+      - key: MAX_COMBINED_ODDS
+        value: "1.800"
+      - key: WITHDRAWAL_CYCLE_DAYS
+        value: "5"
+      - key: WITHDRAWAL_PERCENTAGE
+        value: "0.50"
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_ALLOWED_USER_ID
+        sync: false
+      - key: AGENTROUTER_API_KEY
+        sync: false
+      - key: AGENTROUTER_BASE_URL
+        value: https://agentrouter.org/v1
+      - key: AI_MODEL
+        value: deepseek-v4-flash
+      - key: ODDS_API_KEY
+        sync: false
+      - key: SPORTYBET_BASE_URL
+        value: https://www.sportybet.com/ng
