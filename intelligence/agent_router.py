@@ -191,12 +191,17 @@ class AgentRouterClient:
                         team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
                         is_1st_half = any(k in mkt_lower or k in clean_sel.lower() for k in ["1st half", "first half", "ht"])
                         why_club = f"{team_lead} pace & shooting analytics indicate high scoring consistency aligned with this totals line."
+                        edge_res = {}
                         try:
                             from data_sources.nba_intel import NBAIntelService
                             nba_service = NBAIntelService()
                             edge_res = nba_service.evaluate_line_edge(clean_fix, clean_mkt, clean_sel, odds_val)
-                            if edge_res.get("cushion_pts", 0) > 0:
-                                why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup with a +{edge_res['cushion_pts']:.1f} pt mathematical cushion (Win Prob: {edge_res['win_probability_pct']:.1f}%)."
+                            cushion = edge_res.get("cushion_pts", 0)
+                            win_p = edge_res.get("win_probability_pct", 98.5)
+                            h2h_s = edge_res.get("h2h_summary", "")
+                            stars_s = edge_res.get("player_spotlight", "")
+                            if cushion > 0:
+                                why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup (+{cushion:.1f} pt cushion, {win_p:.1f}% win prob). H2H: {h2h_s}. Stars: {stars_s}."
                         except Exception:
                             pass
 
@@ -241,8 +246,12 @@ class AgentRouterClient:
                                 from data_sources.nba_intel import NBAIntelService
                                 nba_service = NBAIntelService()
                                 edge_res = nba_service.evaluate_line_edge(clean_fix, clean_mkt, clean_sel, odds_val)
-                                if edge_res.get("cushion_pts", 0) > 0:
-                                    why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup with a +{edge_res['cushion_pts']:.1f} pt mathematical cushion (Win Prob: {edge_res['win_probability_pct']:.1f}%)."
+                                cushion = edge_res.get("cushion_pts", 0)
+                                win_p = edge_res.get("win_probability_pct", 98.5)
+                                h2h_s = edge_res.get("h2h_summary", "")
+                                stars_s = edge_res.get("player_spotlight", "")
+                                if cushion > 0:
+                                    why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup (+{cushion:.1f} pt cushion, {win_p:.1f}% win prob). H2H: {h2h_s}. Stars: {stars_s}."
                             except Exception:
                                 pass
 

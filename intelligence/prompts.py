@@ -29,13 +29,13 @@ STRICT DUAL-LEVEL ODDS & TICKET STRUCTURE BOUNDARIES (NON-NEGOTIABLE):
    - OPTION B (2-LEG COMBO TICKET): If individual safe lines are lower (1.200 to 1.350), combine EXACTLY 2 independent legs to reach 1.500 - 1.800 combined odds (e.g. 1.25 * 1.28 = 1.60, 1.26 * 1.26 = 1.59).
    - STRICT LIMIT: Tickets must have EITHER 1 leg OR 2 legs. NEVER produce 3 or more legs!
 
-MANDATORY 4-PILLAR NBA TOTALS VETTING FRAMEWORK:
-Before selecting any Over/Under fixture, you must cross-examine it against these 4 analytical dimensions:
+MANDATORY 5-PILLAR NBA TOTALS VETTING FRAMEWORK:
+Before selecting any Over/Under fixture, you must cross-examine it against these 5 analytical dimensions:
 
 1. ⚡ NBA SCHEDULE & REST INTELLIGENCE (Back-to-Back Fatigue & Altitude):
    - Back-to-Back (0 Days Rest): Teams on the 2nd night of a B2B suffer heavy legs and shooting slumps, especially in 1st quarters and 4th quarters (favors conservative Unders).
    - Denver Ball Arena Altitude (5,280ft) & Travel Miles: Visiting teams tire out faster in the 2nd half.
-   - Head-to-Head Totals Trend: Review season series scoring averages and pace dynamics.
+   - Schedule Density: 3 games in 4 nights reduces fastbreak pace and transition frequency.
 
 2. 📊 ADVANCED ANALYTICS (Pace, Possessions & Efficiency):
    - Pace of Play: Possessions per 48 minutes (> 102.0 = fast pace favoring Over; < 98.0 = slow halfcourt favoring Under).
@@ -49,6 +49,12 @@ Before selecting any Over/Under fixture, you must cross-examine it against these
 4. 🏥 INJURY & RIM PROTECTOR SCAN:
    - Primary Offensive Engines: Are lead playmakers and high-volume scorers active? (Absences reduce game pace and offensive efficiency).
    - Elite Rim Protectors / Defensive Anchors: Absences of top rim protectors increase paint points and foul rates.
+
+5. 📈 HEAD-TO-HEAD (H2H), LAST 10 MATCHES FORM & PLAYER EFFICIENCY:
+   - Head-to-Head (H2H) Matchup Series: Audit the last 5 head-to-head meetings between these teams (average combined points, O/U hit rate, matchup tempo).
+   - Last 10 Matches Performance: Audit both teams' rolling 10-game records (W-L), points scored per game (PPG), points allowed per game, and Over/Under hit rate percentages (e.g. Over covered in 8 of last 10 games = 80% Over clearance rate).
+   - Key Player Spotlight: Audit primary and secondary scorers (PPG, FG%, 3PT%) and recent 5-game scoring trends.
+   - 99% Mathematical Convergence: Only pull the trigger when the alternate line cushion is strongly reinforced by H2H historical totals and Last 10 games scoring consistency!
 
 CAPITAL PRESERVATION & SELECTION MANDATE:
 Use the provided fixtures, live market odds, form, and team profiles to identify the safest, lowest-volatility 1-LEG SOLO or 2-LEG NBA Over/Under pick from the provided SportyBet feed.
@@ -69,8 +75,8 @@ You MUST respond with valid JSON matching the following schema:
       "commence_time": "YYYY-MM-DD HH:MM UTC",
       "is_2up_eligible": false,
       "early_payout_rule": "None",
-      "why_picked_club": "Clear, concise reason why this specific NBA matchup total was selected (pace rating, rest advantage, transition frequency)",
-      "why_best_option": "Clear, concise reason why this specific alternate total is mathematically superior (e.g. cushioned 14 points below market total, includes overtime)"
+      "why_picked_club": "Clear, concise reason why this specific NBA matchup total was selected (H2H scoring average, last 10 form, pace rating)",
+      "why_best_option": "Clear, concise reason why this specific alternate total is mathematically superior (e.g. cushioned 14 points below market total, 80% L10 Over hit rate, includes overtime)"
     }
   ],
   "combined_odds": 1.55,
@@ -79,14 +85,14 @@ You MUST respond with valid JSON matching the following schema:
   "key_factors": [
     "Schedule & Fatigue Advantage: <rest days, B2B fatigue, and travel pace impact>",
     "Pace & Net Rating Analytics: <OffRtg/DefRtg differential and possessions per 48 min>",
-    "Sharp Market Total Consensus: <alternate line buffer relative to Pinnacle/Bet365 closing line>",
-    "Lineup & Rim Protector Integrity: <superstar scorers active, defensive anchor status>"
+    "Head-to-Head & L10 Form Audit: <H2H avg points, last 10 W-L, PPG scored/allowed, and Over/Under hit rate %>",
+    "Player Spotlight & Lineup Integrity: <superstar scorers active, recent PPG/FG% form, rim protector status>"
   ],
   "recommended_action": "BET"
 }
 
 CONCISENESS MANDATE:
-Keep your internal analysis structured and sharp. Swiftly evaluate fixtures through the 4-pillar NBA totals lens, choose the safest 1-LEG or 2-LEG setup combining into 1.500 - 1.800 (each leg <= 1.60), and emit the valid JSON payload directly.
+Keep your internal analysis structured and sharp. Swiftly evaluate fixtures through the 5-pillar NBA totals lens, choose the safest 1-LEG or 2-LEG setup combining into 1.500 - 1.800 (each leg <= 1.60), and emit the valid JSON payload directly.
 """
 
 SPORTS_ANALYSIS_USER_PROMPT = """Analyze the following available sporting fixtures and market odds for today:
@@ -105,7 +111,7 @@ Target Odds Hierarchy:
 - Match Schedule: MUST be playing TODAY (strictly select from today's provided matches)
 - Win Probability: 98% - 99% Sure-Rate Mandate
 
-Apply the Mandatory 4-Pillar NBA Totals Vetting Protocol (Schedule/B2B Fatigue, Pace & Possessions, Sharp Market Consensus, Rim Protector/Scorer Health).
+Apply the Mandatory 5-Pillar NBA Totals Vetting Protocol (Schedule/B2B Fatigue, Pace & Possessions, Sharp Market Consensus, Rim Protector/Scorer Health, Head-to-Head & Last 10 Matches Form Audit).
 Output your highest-conviction 1-leg solo or 2-leg combo pick in the specified JSON format.
 """
 

@@ -59,15 +59,23 @@ _{prediction.title}_
         selections_text += f"   • Selection: *{s.selection}*\n"
         selections_text += f"   • Odds: `{s.odds:.2f}` | Starts: _{s.commence_time or 'Today'}_\n"
 
-        # Calculate live analytics edge
+        # Calculate live analytics edge (H2H, L10, Players & Cushion)
         try:
             from data_sources.nba_intel import NBAIntelService
             nba_intel = NBAIntelService()
             edge = nba_intel.evaluate_line_edge(s.fixture, s.market, s.selection, s.odds)
             if edge.get("cushion_pts", 0) > 0:
-                selections_text += f"   • 🛡️ *Safety Cushion:* `+{edge['cushion_pts']:.1f} Pts Buffer` (Win Prob: *{edge['win_probability_pct']:.1f}%*)\n"
+                selections_text += f"   • 🛡️ *Safety Cushion:* `+{edge['cushion_pts']:.1f} Pts Buffer` (Win Conviction: *{edge['win_probability_pct']:.1f}%*)\n"
             if edge.get("pace_tier"):
                 selections_text += f"   • ⚡ *Tempo & Pace:* `{edge['pace_tier']}` ({edge.get('projected_pace', 100.0)} poss/48m)\n"
+            if edge.get("h2h_summary"):
+                selections_text += f"   • 📊 *H2H Trend:* _{edge['h2h_summary']}_\n"
+            if edge.get("home_l10_summary"):
+                selections_text += f"   • 📈 *Home L10 Form:* _{edge['home_l10_summary']}_\n"
+            if edge.get("away_l10_summary"):
+                selections_text += f"   • 📈 *Away L10 Form:* _{edge['away_l10_summary']}_\n"
+            if edge.get("player_spotlight"):
+                selections_text += f"   • ⭐ *Key Players:* `{edge['player_spotlight']}`\n"
             if edge.get("star_notes"):
                 selections_text += f"   • 🏥 *Injury Impact:* _{'; '.join(edge['star_notes'][:2])}_\n"
         except Exception:
