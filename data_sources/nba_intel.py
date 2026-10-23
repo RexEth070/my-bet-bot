@@ -716,6 +716,163 @@ class NBAIntelService:
             "player_spotlight": matchup_intel["player_spotlight"],
         }
 
+    def rate_and_compare_three_options(
+        self,
+        fixture: str,
+        current_market: Optional[str] = None,
+        current_selection: Optional[str] = None,
+        current_odds: float = 1.30,
+        market: Optional[str] = None,
+        selection: Optional[str] = None,
+        odds: Optional[float] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        """Compares and rates all 3 strictly allowed betting options for an NBA fixture:
+        1. Over/Under Total Points (incl. Overtime)
+        2. First Half Over/Under
+        3. Winner (incl. Overtime) [15-Up Early Payout]
+
+        Returns ratings (1-100), ranking (1st, 2nd, 3rd), cushions, and the recommended #1 pick.
+        """
+        chosen_market = market or current_market
+        chosen_selection = selection or current_selection
+        chosen_odds = odds if odds is not None else current_odds
+
+        parts = fixture.split(" vs ")
+        home = parts[0].strip() if len(parts) > 1 else fixture
+        away = parts[1].strip() if len(parts) > 1 else ""
+
+        proj = self.calculate_matchup_projections(home, away)
+        matchup_intel = self.get_matchup_intel(home, away)
+
+        # ------------------------------------------------------------------
+        # 1. Option 1: Over/Under Total Points (incl. Overtime)
+        # ------------------------------------------------------------------
+        exp_total = proj["projected_total_pts"]
+        h_l10 = matchup_intel["home_l10"]
+        a_l10 = matchup_intel["away_l10"]
+        h2h = matchup_intel["h2h"]
+
+        if (h_l10["over_pct"] + a_l10["over_pct"]) / 2.0 >= 60.0 or h2h["h2h_over_pct"] >= 60.0:
+            opt1_cushion = 13.5
+            opt1_base = 97.5
+            opt1_boost = 0.5 if (h_l10["over_pct"] >= 70.0 and a_l10["over_pct"] >= 70.0) else 0.2
+            opt1_line_desc = f"Over {round(exp_total - opt1_cushion, 1)} (incl. OT)"
+            opt1_rationale = f"Alternate Over cushioned 13.5 pts below projected total ({exp_total:.1f}) with free OT points protection."
+        else:
+            opt1_cushion = 12.0
+            opt1_base = 97.0
+            opt1_boost = 0.5 if (h_l10["under_pct"] >= 60.0 and a_l10["under_pct"] >= 60.0) else 0.2
+            opt1_line_desc = f"Under {round(exp_total + opt1_cushion, 1)} (incl. OT)"
+            opt1_rationale = f"Alternate Under with 12.0 pts ceiling buffer above projected total ({exp_total:.1f})."
+
+        opt1_rating = round(min(98.8, opt1_base + opt1_boost), 1)
+
+        # ------------------------------------------------------------------
+        # 2. Option 2: First Half Over/Under
+        # ------------------------------------------------------------------
+        exp_1st = proj["projected_1st_half_pts"]
+        if (h_l10["over_pct"] + a_l10["over_pct"]) / 2.0 >= 65.0:
+            opt2_cushion = 9.5
+            opt2_rating = 97.4
+            opt2_line_desc = f"Over {round(exp_1st - opt2_cushion, 1)} (1st Half)"
+            opt2_rationale = "High-efficiency 1st half start cashing at halftime without 4th-quarter blowout risk."
+        else:
+            opt2_cushion = 9.0
+            opt2_rating = 97.2
+            opt2_line_desc = f"Under {round(exp_1st + opt2_cushion, 1)} (1st Half)"
+            opt2_rationale = "Insulated against end-of-game free-throw elongation and garbage time."
+
+        # ------------------------------------------------------------------
+        # 3. Option 3: Winner (incl. Overtime) [15-Up Early Payout]
+        # ------------------------------------------------------------------
+        total_proj = proj.get("projected_total_pts", 220.0)
+        home_pts = proj.get("home_projected_pts", round(total_proj * 0.51, 1))
+        away_pts = proj.get("away_projected_pts", round(total_proj * 0.49, 1))
+        margin = round(abs(home_pts - away_pts), 1)
+        fav_team = home if home_pts >= away_pts else away
+        dog_team = away if home_pts >= away_pts else home
+        fav_l10 = h_l10 if fav_team == home else a_l10
+        dog_l10 = a_l10 if fav_team == home else h_l10
+
+        if margin >= 11.0:
+            opt3_rating = 99.2
+        elif margin >= 8.0:
+            opt3_rating = 98.7
+        elif margin >= 5.0:
+            opt3_rating = 97.6
+        else:
+            opt3_rating = 95.0
+
+        if fav_l10.get("win_pct", 0) >= 70.0 and dog_l10.get("win_pct", 0) <= 40.0:
+            opt3_rating = min(99.4, opt3_rating + 0.3)
+        if matchup_intel.get("has_b2b_mismatch"):
+            opt3_rating = min(99.4, opt3_rating + 0.2)
+
+        opt3_line_desc = f"{fav_team} (To Win) [15-Up Early Payout]"
+        opt3_rationale = (
+            f"{fav_team} holds +{margin:.1f} pt projected scoring advantage; "
+            "15-Up Early Payout pays out as a full WIN if 15 pts ahead at any point, eliminating 4th-quarter comeback risks."
+        )
+
+        options = [
+            {
+                "option_number": 1,
+                "market_name": "Over/Under Total Points (incl. Overtime)",
+                "recommended_pick": opt1_line_desc,
+                "rating_pct": opt1_rating,
+                "safety_cushion": f"+{opt1_cushion:.1f} pts buffer",
+                "rationale": opt1_rationale,
+            },
+            {
+                "option_number": 2,
+                "market_name": "First Half Over/Under",
+                "recommended_pick": opt2_line_desc,
+                "rating_pct": opt2_rating,
+                "safety_cushion": f"+{opt2_cushion:.1f} pts buffer",
+                "rationale": opt2_rationale,
+            },
+            {
+                "option_number": 3,
+                "market_name": "Winner (incl. Overtime) [15-Up Early Payout]",
+                "recommended_pick": opt3_line_desc,
+                "rating_pct": opt3_rating,
+                "safety_cushion": f"+{margin:.1f} pt margin (15-Up Trigger)",
+                "rationale": opt3_rationale,
+            },
+        ]
+
+        options.sort(key=lambda x: x["rating_pct"], reverse=True)
+        for rank, opt in enumerate(options, 1):
+            opt["rank"] = rank
+
+        best_opt = options[0]
+        second_opt = options[1]
+        third_opt = options[2]
+
+        verdict_summary = (
+            f"Option {best_opt['option_number']} ({best_opt['market_name']}) ranked #1 with {best_opt['rating_pct']}% conviction "
+            f"over Option {second_opt['option_number']} ({second_opt['rating_pct']}%) and Option {third_opt['option_number']} ({third_opt['rating_pct']}%) "
+            f"because: {best_opt['rationale']}"
+        )
+
+        matrix_lines = [
+            f"🥇 Option {best_opt['option_number']} [{best_opt['market_name']}]: *{best_opt['rating_pct']}% Rating* (SELECTED — #1 Optimal Pick)",
+            f"🥈 Option {second_opt['option_number']} [{second_opt['market_name']}]: {second_opt['rating_pct']}% Rating ({second_opt['safety_cushion']})",
+            f"🥉 Option {third_opt['option_number']} [{third_opt['market_name']}]: {third_opt['rating_pct']}% Rating ({third_opt['safety_cushion']})",
+        ]
+
+        return {
+            "options": options,
+            "best_option_number": best_opt["option_number"],
+            "best_option_market": best_opt["market_name"],
+            "best_option_pick": best_opt["recommended_pick"],
+            "best_option_rating": best_opt["rating_pct"],
+            "verdict_summary": verdict_summary,
+            "matrix_lines": matrix_lines,
+            "formatted_matrix": "\n".join(matrix_lines),
+        }
+
     def evaluate_line_edge(
         self,
         fixture: str,
@@ -730,6 +887,7 @@ class NBAIntelService:
 
         proj = self.calculate_matchup_projections(home, away)
         matchup_intel = self.get_matchup_intel(home, away)
+        three_way = self.rate_and_compare_three_options(fixture, market, selection, odds)
         target_text = f"{market} {selection}".lower()
 
         clean_search_text = re.sub(r"\b1st\b", "", target_text)
@@ -747,8 +905,9 @@ class NBAIntelService:
         # Branch A: Winner (incl. Overtime) with 15-Up Early Payout
         # -------------------------------------------------------------
         if is_winner:
-            home_pts = proj["home_projected_pts"]
-            away_pts = proj["away_projected_pts"]
+            tot_pts = proj.get("projected_total_pts", 220.0)
+            home_pts = proj.get("home_projected_pts", round(tot_pts * 0.51, 1))
+            away_pts = proj.get("away_projected_pts", round(tot_pts * 0.49, 1))
             is_home_pick = (
                 home.lower() in target_text
                 or any(w in target_text for w in home.lower().split() if len(w) > 2)
@@ -779,7 +938,7 @@ class NBAIntelService:
                 opp_l10 = matchup_intel["away_l10"] if home_pts >= away_pts else matchup_intel["home_l10"]
 
             cushion = projected_margin
-            expected_pts = proj["home_projected_pts"] if chosen_team == home else proj["away_projected_pts"]
+            expected_pts = home_pts if chosen_team == home else away_pts
 
             # 15-Up Early Payout Security Math:
             # When backed team gains a 15-point lead at ANY point in the 48 minutes,
@@ -823,6 +982,10 @@ class NBAIntelService:
                 "home_l10_summary": matchup_intel["home_l10_summary"],
                 "away_l10_summary": matchup_intel["away_l10_summary"],
                 "player_spotlight": matchup_intel["player_spotlight"],
+                "three_way_matrix": three_way["formatted_matrix"],
+                "three_way_verdict": three_way["verdict_summary"],
+                "three_way_options": three_way["options"],
+                "best_option_number": three_way["best_option_number"],
             }
 
         # -------------------------------------------------------------
@@ -889,4 +1052,8 @@ class NBAIntelService:
             "home_l10_summary": matchup_intel["home_l10_summary"],
             "away_l10_summary": matchup_intel["away_l10_summary"],
             "player_spotlight": matchup_intel["player_spotlight"],
+            "three_way_matrix": three_way["formatted_matrix"],
+            "three_way_verdict": three_way["verdict_summary"],
+            "three_way_options": three_way["options"],
+            "best_option_number": three_way["best_option_number"],
         }

@@ -208,6 +208,63 @@ class TestNBAStatsIntelligence(unittest.TestCase):
         msg = format_daily_pick_message(pred, state)
         self.assertIn("15-Up Early Payout: ELIGIBLE", msg)
 
+    def test_rate_and_compare_three_options(self):
+        """Verify that all 3 options are quantitatively rated and ranked side-by-side."""
+        comparison = self.intel.rate_and_compare_three_options(
+            fixture="Boston Celtics vs Charlotte Hornets",
+            market="Over/Under Total Points (incl. Overtime)",
+            selection="Over 214.5 Points (incl. OT)",
+            odds=1.55,
+        )
+        self.assertEqual(len(comparison["options"]), 3)
+        # All 3 option numbers present
+        option_numbers = {opt["option_number"] for opt in comparison["options"]}
+        self.assertEqual(option_numbers, {1, 2, 3})
+        # Verifies ranks 1, 2, 3 are assigned and sorted descending by rating_pct
+        ratings = [opt["rating_pct"] for opt in comparison["options"]]
+        self.assertEqual(ratings, sorted(ratings, reverse=True))
+        self.assertEqual(comparison["options"][0]["rank"], 1)
+        self.assertEqual(comparison["options"][1]["rank"], 2)
+        self.assertEqual(comparison["options"][2]["rank"], 3)
+        # Check verdict summary and formatted matrix
+        self.assertIn("verdict_summary", comparison)
+        self.assertIn("ranked #1", comparison["verdict_summary"])
+        self.assertIn("formatted_matrix", comparison)
+        self.assertIn("🥇 Option", comparison["formatted_matrix"])
+        self.assertIn("🥈 Option", comparison["formatted_matrix"])
+        self.assertIn("🥉 Option", comparison["formatted_matrix"])
+        self.assertIn(comparison["best_option_number"], [1, 2, 3])
+
+    def test_telegram_pick_card_renders_three_way_matrix(self):
+        """Verify Telegram pick card renders the 3-Way Comparative Rating Matrix."""
+        pred = AIPrediction(
+            title="NBA Comparative Pick",
+            selections=[
+                MatchSelection(
+                    fixture="Boston Celtics vs Charlotte Hornets",
+                    sport="basketball",
+                    market="Winner (incl. Overtime)",
+                    selection="Boston Celtics (To Win)",
+                    odds=1.28,
+                    commence_time="Today",
+                    is_2up_eligible=True,
+                    early_payout_rule="15-Up",
+                )
+            ],
+            combined_odds=1.28,
+            confidence_score=10,
+            risk_level="LOW",
+            suggested_stake=500.0,
+            recommended_action="BET",
+        )
+        state = LedgerState(user_id=123456, current_day=1, current_balance=500.0)
+        msg = format_daily_pick_message(pred, state)
+        self.assertIn("3-Way Option Audit & Comparative Rating", msg)
+        self.assertIn("🥇 Option", msg)
+        self.assertIn("🥈 Option", msg)
+        self.assertIn("🥉 Option", msg)
+        self.assertIn("Why best bet option", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

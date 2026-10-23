@@ -207,7 +207,10 @@ class AgentRouterClient:
                         except Exception:
                             pass
 
-                        if is_win_market:
+                        three_verdict = edge_res.get("three_way_verdict")
+                        if three_verdict:
+                            why_opt = f"3-Way Audit Verdict: {three_verdict}"
+                        elif is_win_market:
                             why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
                         elif is_1st_half:
                             why_opt = "1-Leg Solo Ticket (1st Half Over/Under) cashes at halftime, completely bypassing 4th-quarter garbage time."
@@ -253,6 +256,7 @@ class AgentRouterClient:
                             team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
                             is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
                             why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
+                            edge_res = {}
                             try:
                                 from data_sources.nba_intel import NBAIntelService
                                 nba_service = NBAIntelService()
@@ -266,7 +270,10 @@ class AgentRouterClient:
                             except Exception:
                                 pass
 
-                            if is_win_market:
+                            three_verdict = edge_res.get("three_way_verdict")
+                            if three_verdict:
+                                why_opt = f"3-Way Audit Verdict: {three_verdict}"
+                            elif is_win_market:
                                 why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
                             elif is_1st_half:
                                 why_opt = "1st Half Over/Under provides early security, avoiding 4th-quarter garbage time."

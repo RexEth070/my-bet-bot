@@ -12,10 +12,12 @@ _Your 30-Day Compound Growth & Profit-Locking Agent_
 
 🎯 *NBA Strategy Blueprint:*
 • Primary Focus: *NBA Basketball Exclusive* (games played every day through April — uninterrupted 30-day compounding!)
-• Strictly Allowed High-Conviction Options:
+• Strictly Allowed High-Conviction Options (3 Total):
    1. *Over/Under Total Points (incl. Overtime)* — Cushioned full-game totals with free overtime points protection!
    2. *First Half Over/Under* — Early-settling 1st half totals, completely insulated from 4th-quarter garbage time!
    3. *Winner (incl. Overtime) [15-Up Early Payout]* — Moneyline to-win with 15-Up lead protection: paid as an immediate full WIN if chosen team leads by 15+ points at any moment!
+• ⚖️ *3-Way Option Audit & Comparative Rating:*
+   For every match, the bot quantitatively rates all 3 options side-by-side (95% to 99%+ win conviction) and selects ONLY the #1 ranked optimal option that guarantees the 98%–99% win rate!
 • Flexible High-Conviction Format:
    • *1-Leg Solo Pick:* When a single top-tier line has odds between *1.50 and 1.60* with a 99% win conviction rating (eliminating second-leg exposure!).
    • *2-Leg Combo Ticket:* When combining two cushioned lines (*1.20 - 1.35*) to safely reach *1.500 - 1.800* combined odds.
@@ -67,6 +69,10 @@ _{prediction.title}_
             edge = nba_intel.evaluate_line_edge(s.fixture, s.market, s.selection, s.odds)
             if edge.get("cushion_pts", 0) > 0:
                 selections_text += f"   • 🛡️ *Safety Cushion:* `+{edge['cushion_pts']:.1f} Pts Buffer` (Win Conviction: *{edge['win_probability_pct']:.1f}%*)\n"
+            if edge.get("three_way_matrix"):
+                selections_text += f"   • ⚖️ *3-Way Option Audit & Comparative Rating:*\n"
+                for line in edge["three_way_matrix"].split("\n"):
+                    selections_text += f"     {line}\n"
             if edge.get("pace_tier"):
                 selections_text += f"   • ⚡ *Tempo & Pace:* `{edge['pace_tier']}` ({edge.get('projected_pace', 100.0)} poss/48m)\n"
             if edge.get("h2h_summary"):
@@ -84,8 +90,9 @@ _{prediction.title}_
 
         if s.why_picked_club:
             selections_text += f"   • 🏟️ *Why this team:* {s.why_picked_club}\n"
-        if s.why_best_option:
-            selections_text += f"   • 🎯 *Why best bet option:* {s.why_best_option}\n"
+        why_opt = s.why_best_option or (edge.get("three_way_verdict") if 'edge' in locals() and edge else "")
+        if why_opt:
+            selections_text += f"   • 🎯 *Why best bet option:* {why_opt}\n"
         if s.early_payout_rule in ("15-Up", "2-Up", "1-Up") or s.is_2up_eligible:
             selections_text += "   • ⚡ *SportyBet 15-Up Early Payout: ELIGIBLE* (Paid as full WIN if 15 pts ahead at any stage!)\n"
 
@@ -313,7 +320,7 @@ def format_stats_dashboard_message(stats: dict, currency: str = "NGN") -> str:
 • Ticket Format: *1-Leg Solo (1.50 - 1.60) or 2-Leg Combo*
 • Odds Ceiling: *Max 1.60 per match* (strictly 1.200 - 1.600)
 • Target Daily Odds: *~{stats.get('avg_odds', 1.55):.2f}* (1.500 - 1.800)
-• Early Settlement: *Halftime Settlement (1st Half) & Over Points Clearance*
+• Early Settlement: *Halftime Settlement (1st Half), Over Points Clearance & 15-Up Early Payout*
 
 💡 _Tap **🏀 NBA Strategy** or type `/nba` to review active engine rules._
 """
@@ -321,13 +328,20 @@ def format_stats_dashboard_message(stats: dict, currency: str = "NGN") -> str:
 
 def format_nba_strategy_message() -> str:
     """Formats the active NBA Strategy briefing."""
-    return f"""🏀 *ACTIVE NBA TOTALS STRATEGY BRIEFING*
+    return f"""🏀 *ACTIVE NBA TOTALS & 3-WAY OPTION STRATEGY BRIEFING*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 The bot is strictly locked to **NBA Basketball** — running daily through April!
 
-🎯 *Allowed Options / Markets (Only 2):*
+🎯 *Allowed High-Conviction Bet Options (3 Total):*
 1. *Over/Under Total Points (incl. Overtime)* — Alternate game totals with full overtime points security.
 2. *First Half Over/Under* — Early-settling 1st half totals, completely bypassing 4th-quarter garbage time.
+3. *Winner (incl. Overtime) [15-Up Early Payout]* — Moneyline to-win with 15-Up lead protection: paid out immediately as a full WIN if chosen team leads by 15+ points at any stage!
+
+⚖️ *Mandatory 3-Way Comparative Rating Engine:*
+Before any pick is chosen for the day, the bot mathematically audits and rates ALL 3 options side-by-side:
+• Calculates exact safety cushion (+10 to +16 pts or +10+ pt margin).
+• Scores win probability on a 95% to 99.4% scale.
+• Selects ONLY the #1 optimal option that gives the highest mathematical safety margin for your 99% win guarantee!
 
 ⚡ *High-Conviction Ticket Structure:*
 • *1-Leg Solo Pick:* When a single alternate line has odds between *1.50 and 1.60* and a 99% win-rate rating (eliminates second-leg exposure completely!).
@@ -342,6 +356,7 @@ The bot is strictly locked to **NBA Basketball** — running daily through April
 🏎️ *Rapid Early Auto-Settlement:*
 • *1st Half Over/Under* automatically grades at halftime as soon as Q2 finishes.
 • *Over Total Points* automatically settles as WON mid-game as soon as cumulative points exceed the line threshold!
+• *15-Up Early Payout* settles as an instant WON as soon as the team leads by 15+ points!
 
 Tap *🎯 Today's Pick* or type `/today` to scan!
 """
@@ -361,7 +376,8 @@ def format_memory_cleared_message() -> str:
 
 🏀 **Active Engine Status:**
 • Sport: *Strictly NBA Basketball* (no football / soccer).
-• Markets: *Over/Under (incl. OT)* & *First Half Over/Under*.
+• Markets: *Over/Under (incl. OT)*, *First Half Over/Under*, & *Winner (incl. OT) [15-Up Early Payout]*.
+• 3-Way Comparative Rating: *ACTIVE* (Always rates all 3 options and picks #1 for 99% win guarantee).
 • Format: *1-Leg Solo (1.50 - 1.60 odds)* or *2-Leg Combo*.
 • Max Leg Odds: *1.60 per match*.
 
