@@ -187,11 +187,14 @@ class OddsApiClient:
 
         def extract_vetted_nba_options(event_list, max_options):
             sorted_events = sorted(event_list, key=get_priority)
-            # STRICT MARKET ENFORCEMENT: ONLY Over/Under incl. Overtime and 1st Half Over/Under
+            # STRICT MARKET ENFORCEMENT: ONLY Over/Under incl. Overtime, 1st Half Over/Under, and Winner (incl. Overtime) [15-Up Early Payout]
             allowed_markets = {
                 "18": ("Over/Under Total Points (incl. Overtime)", 1),
                 "222": ("Over/Under Total Points (incl. Overtime)", 1),
                 "68": ("1st Half Over/Under", 2),
+                "219": ("Winner (incl. Overtime)", 1),
+                "60100": ("Winner (incl. Overtime)", 1),
+                "1": ("Winner (incl. Overtime)", 1),
             }
             collected = []
             nba_service = NBAIntelService()
@@ -239,6 +242,13 @@ class OddsApiClient:
                             continue
                         if 1.200 <= odds <= 1.600:
                             desc = clean_team_name(o.get("desc", ""))
+                            if "winner" in m_label.lower():
+                                oid = str(o.get("id", ""))
+                                if desc in ("1", "Home") or oid in ("1", "4"):
+                                    desc = f"{home} (To Win)"
+                                elif desc in ("2", "Away") or oid in ("2", "5"):
+                                    desc = f"{away} (To Win)"
+
                             edge_info = {}
                             if nba_service:
                                 try:
@@ -249,6 +259,8 @@ class OddsApiClient:
                             cushion = edge_info.get("cushion_pts", 0.0)
                             win_pct = edge_info.get("win_probability_pct", 95.0)
                             is_solo = edge_info.get("is_solo_candidate", False)
+                            is_15up = edge_info.get("is_15up_eligible", False) or "winner" in m_label.lower()
+                            payout_tag = " | ⚡ 15-Up Early Payout: ELIGIBLE (Paid as WIN if 15 pts ahead)" if is_15up else ""
                             pace_tag = f" | Pace: {edge_info.get('pace_tier', 'BALANCED')}" if edge_info.get("pace_tier") else ""
                             cushion_tag = f" | Cushion: +{cushion} pts (Win Prob: {win_pct:.1f}%)" if cushion > 0 else ""
                             star_tag = f" | Note: {'; '.join(edge_info.get('star_notes', []))}" if edge_info.get("star_notes") else ""
@@ -265,7 +277,7 @@ class OddsApiClient:
                                 "tier": calculated_tier,
                                 "cushion": cushion,
                                 "odds": odds,
-                                "line": f"[BASKETBALL - NBA] {home} vs {away} | Market: {m_label}{spec_str} | Pick: {desc} @ {odds:.2f} (Odds: {odds:.2f}){solo_tag}{cushion_tag}{pace_tag}{h2h_tag}{l10_tag}{players_tag}{extra_intel}{star_tag}",
+                                "line": f"[BASKETBALL - NBA] {home} vs {away} | Market: {m_label}{spec_str} | Pick: {desc} @ {odds:.2f} (Odds: {odds:.2f}){solo_tag}{payout_tag}{cushion_tag}{pace_tag}{h2h_tag}{l10_tag}{players_tag}{extra_intel}{star_tag}",
                             })
 
             collected.sort(key=lambda x: (x["tier"], -x["cushion"], x["odds"]))
@@ -277,21 +289,21 @@ class OddsApiClient:
             "TODAY'S OFFICIAL FIXTURES & REAL MARKET ODDS (SportyBet Nigeria Live Feed):",
             "PRIMARY SPORT FOCUS: NBA BASKETBALL (NBA EXCLUSIVE).",
             "MANDATORY TIME RULE: ALL MATCHES BELOW PLAY STRICTLY TODAY. NEVER PICK FUTURE GAMES.",
-            "STRICT MARKET RULE: ONLY 'Over/Under Total Points (incl. Overtime)' and 'First Half Over/Under' ALLOWED.",
+            "STRICT MARKET RULE: ONLY 'Over/Under Total Points (incl. Overtime)', 'First Half Over/Under', and 'Winner (incl. Overtime) [15-Up Early Payout]' ALLOWED.",
             "CRITICAL ODDS & TICKET SELECTION CRITERIA:",
             "  - TICKET STRUCTURE: 1-LEG (SOLO) OR 2-LEGS (DOUBLE COMBO). MAX 2 LEGS!",
-            "  - OPTION A (1-LEG SOLO): If an alternate Over/Under (incl. OT) or 1st Half Over/Under line has odds between 1.500 and 1.600 with 98-99% win conviction, select it as a 1-LEG SOLO TICKET (eliminating 2nd leg risk).",
+            "  - OPTION A (1-LEG SOLO): If an alternate Over/Under (incl. OT), 1st Half Over/Under, or Winner (incl. OT) [15-Up] line has odds between 1.500 and 1.600 with 98-99% win conviction, select it as a 1-LEG SOLO TICKET (eliminating 2nd leg risk).",
             "  - OPTION B (2-LEG COMBO): If individual safe lines are lower (1.200 to 1.350), combine EXACTLY 2 legs to achieve combined 1.500 - 1.800 odds.",
             "  - INDIVIDUAL ODDS LIMIT: Strictly 1.200 to 1.600 per match (NON of each odds per match should exceed 1.60).",
-            "  - Target 98-99% win probability using alternate total cushions and 1st half defensive pace matchups.",
+            "  - Target 98-99% win probability using alternate total cushions, 1st half defensive pace matchups, or 15-Up Early Payout lead protection.",
             "---------------------------------------------------------------------------------------",
         ]
         if nba_vetted:
-            lines.append(f"\n=== SECTION 1: NBA BASKETBALL (TOP {len(nba_vetted)} OVER/UNDER HIGH-CONVICTION OPTIONS FOR TODAY) ===")
+            lines.append(f"\n=== SECTION 1: NBA BASKETBALL (TOP {len(nba_vetted)} HIGH-CONVICTION OPTIONS FOR TODAY) ===")
             for idx, opt in enumerate(nba_vetted, 1):
                 lines.append(f"{idx}. {opt}")
         else:
-            lines.append("\n(No live NBA lines on SportyBet feed right now — using sample calibrated NBA Over/Under lines below)")
+            lines.append("\n(No live NBA lines on SportyBet feed right now — using sample calibrated NBA lines below)")
             lines.append(self._get_mock_fixtures())
 
         return "\n".join(lines)
@@ -304,7 +316,7 @@ class OddsApiClient:
         lines = [
             "UPCOMING FIXTURES & REAL MARKET ODDS (NBA Exclusive):",
             "Sports covered: NBA Basketball.",
-            "STRICT CRITERIA: ONLY Over/Under Total Points (incl. Overtime) and First Half Over/Under.",
+            "STRICT CRITERIA: ONLY Over/Under Total Points (incl. Overtime), First Half Over/Under, and Winner (incl. Overtime) [15-Up Early Payout].",
             "---------------------------------------------------------------------------------------",
         ]
 
@@ -341,11 +353,11 @@ class OddsApiClient:
         return "\n".join(lines)
 
     def _get_mock_fixtures(self) -> str:
-        """Realistic sample NBA fixtures strictly for Over/Under incl. Overtime and 1st Half Over/Under."""
+        """Realistic sample NBA fixtures strictly for Over/Under incl. Overtime, 1st Half Over/Under, and Winner (incl. OT) [15-Up Early Payout]."""
         return """UPCOMING FIXTURES & REAL MARKET ODDS (NBA Exclusive Sample Feed):
-1. [BASKETBALL - NBA] Boston Celtics vs Charlotte Hornets | Market: Over/Under Total Points (incl. Overtime) (total=214.5) | Pick: Over 214.5 Points (incl. OT) @ 1.28 (Odds: 1.28) | Cushion: +14.2 pts (Win Prob: 99.2%) | Pace: FAST | H2H: Last 5 H2H Avg 228.4 Pts (Over 4/5 - 80%) | L10: BOS 8W-2L (80% Over, 121.2 PPG) vs CHA 3W-7L (80% Over, 111.4 PPG) | Stars: Boston: Jayson Tatum (28.4 PPG) | Charlotte: LaMelo Ball (24.5 PPG) | Rest: Boston Rested, Charlotte Rested
+1. [BASKETBALL - NBA] Boston Celtics vs Charlotte Hornets | Market: Winner (incl. Overtime) | Pick: Boston Celtics (To Win) @ 1.28 (Odds: 1.28) | ⚡ 15-Up Early Payout: ELIGIBLE (Paid as WIN if 15 pts ahead) | Cushion: +14.2 pts (Win Prob: 99.2%) | Pace: FAST | H2H: Last 5 H2H Avg 228.4 Pts (BOS 5W-0L) | L10: BOS 8W-2L (121.2 PPG, +11.8 Diff) vs CHA 3W-7L (111.4 PPG) | Stars: Boston: Jayson Tatum (28.4 PPG) | Charlotte: LaMelo Ball (24.5 PPG) | Rest: Boston Rested, Charlotte Rested
 2. [BASKETBALL - NBA] Denver Nuggets vs Utah Jazz | Market: 1st Half Over/Under (total=106.5) | Pick: Over 106.5 Points (1st Half) @ 1.26 (Odds: 1.26) | Cushion: +10.5 pts (Win Prob: 98.8%) | Pace: BALANCED | H2H: Last 5 H2H Avg 226.5 Pts (Over 4/5) | L10: DEN 7W-3L (80% Over, 119.4 PPG) vs UTA 3W-7L (80% Over, 110.8 PPG) | Stars: Denver: Nikola Jokic (29.2 PPG) | Utah: Lauri Markkanen (23.2 PPG) | Rest: Denver Rested, Utah B2B
-3. [BASKETBALL - NBA] Oklahoma City Thunder vs Portland Trail Blazers | Market: Over/Under Total Points (incl. Overtime) (total=234.5) | Pick: Under 234.5 Points (incl. OT) @ 1.25 (Odds: 1.25) | Cushion: +12.0 pts (Win Prob: 98.6%) | Pace: BALANCED | H2H: Last 5 H2H Avg 220.5 Pts (Under 4/5) | L10: OKC 8W-2L (Allowed 106.8 PPG) vs POR 3W-7L (Scored 109.2 PPG) | Stars: OKC: Shai Gilgeous-Alexander (30.1 PPG) | Portland: Anfernee Simons (22.6 PPG) | Rest: OKC Rested, Portland Rested
+3. [BASKETBALL - NBA] Oklahoma City Thunder vs Portland Trail Blazers | Market: Winner (incl. Overtime) | Pick: Oklahoma City Thunder (To Win) @ 1.25 (Odds: 1.25) | ⚡ 15-Up Early Payout: ELIGIBLE (Paid as WIN if 15 pts ahead) | Cushion: +13.5 pts (Win Prob: 99.1%) | Pace: BALANCED | H2H: Last 5 H2H (OKC 5W-0L, Avg Margin +16.2) | L10: OKC 8W-2L (Allowed 106.8 PPG) vs POR 3W-7L (Scored 109.2 PPG) | Stars: OKC: Shai Gilgeous-Alexander (30.1 PPG) | Portland: Anfernee Simons (22.6 PPG) | Rest: OKC Rested, Portland Rested
 4. [BASKETBALL - NBA] Minnesota Timberwolves vs Washington Wizards | Market: 1st Half Over/Under (total=118.5) | Pick: Under 118.5 Points (1st Half) @ 1.29 (Odds: 1.29) | Cushion: +11.2 pts (Win Prob: 98.4%) | Pace: SLOW | H2H: Last 5 H2H Avg 219.0 Pts (Under 3/5) | L10: MIN 6W-4L (Allowed 108.2 PPG) vs WSH 2W-8L (Scored 109.8 PPG) | Stars: Minnesota: Anthony Edwards (26.8 PPG) | Washington: Kyle Kuzma (22.2 PPG) | Rest: Minnesota Rested, Washington B2B
 5. [BASKETBALL - NBA] Dallas Mavericks vs Brooklyn Nets | Market: Over/Under Total Points (incl. Overtime) (total=211.5) | Pick: Over 211.5 Points (incl. OT) @ 1.27 (Odds: 1.27) | Cushion: +13.5 pts (Win Prob: 99.0%) | Pace: BALANCED | H2H: Last 5 H2H Avg 227.2 Pts (Over 4/5) | L10: DAL 7W-3L (70% Over, 118.2 PPG) vs BKN 4W-6L (70% Over, 112.8 PPG) | Stars: Dallas: Luka Doncic (31.8 PPG) | Brooklyn: Cam Thomas (23.5 PPG) | Rest: Dallas Rested, Brooklyn Rested
 6. [BASKETBALL - NBA] Cleveland Cavaliers vs Detroit Pistons | Market: 1st Half Over/Under (total=105.5) | Pick: Over 105.5 Points (1st Half) @ 1.25 (Odds: 1.25) | Cushion: +11.8 pts (Win Prob: 98.9%) | Pace: FAST | H2H: Last 5 H2H Avg 226.0 Pts (Over 4/5) | L10: CLE 8W-2L (80% Over, 120.8 PPG) vs DET 4W-6L (70% Over, 112.0 PPG) | Stars: Cleveland: Donovan Mitchell (27.2 PPG) | Detroit: Cade Cunningham (23.0 PPG) | Rest: Cleveland Rested, Detroit Rested

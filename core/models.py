@@ -30,18 +30,20 @@ class MatchSelection(BaseModel):
             odds = 1.25
         commence = data.get("commence_time") or data.get("time") or "Upcoming"
         
-        # Check early payout rule (1-Up, 2-Up, or Basketball Lead)
+        # Check early payout rule (1-Up, 2-Up, or Basketball 15-Up Lead)
         early_payout = data.get("early_payout_rule") or data.get("early_payout")
         combined_text = f"{market} {selection} {data.get('is_2up_eligible', '')} {data.get('is_1up_eligible', '')}".lower()
         if not early_payout:
-            if "1up" in combined_text or "1-up" in combined_text:
+            if any(k in combined_text for k in ["15up", "15-up", "18up", "18-up", "early payout"]):
+                early_payout = "15-Up"
+            elif any(k in market.lower() for k in ["winner", "moneyline", "to win"]):
+                early_payout = "15-Up"
+            elif "1up" in combined_text or "1-up" in combined_text:
                 early_payout = "1-Up"
             elif "2up" in combined_text or "2-up" in combined_text or bool(data.get("is_2up_eligible")):
                 early_payout = "2-Up"
-            elif "15up" in combined_text or "15-up" in combined_text:
-                early_payout = "15-Up"
 
-        is_2up = bool(early_payout == "2-Up" or data.get("is_2up_eligible"))
+        is_2up = bool(early_payout in ("2-Up", "15-Up", "18-Up") or data.get("is_2up_eligible"))
 
         why_club = (
             data.get("why_picked_club")
@@ -163,7 +165,7 @@ class AIPrediction(BaseModel):
             if action == "BET" and require_nba_totals:
                 import re
                 forbidden_mkts = [
-                    "winner", "moneyline", "spread", "handicap", "1x2", "double chance",
+                    "spread", "handicap", "1x2", "double chance",
                     "dnb", "draw no bet", "both teams to score", "btts", "goal", "corner", "card"
                 ]
                 for s in parsed_selections:
@@ -181,14 +183,17 @@ class AIPrediction(BaseModel):
                     text = f"{mkt_lower} {sel_lower}"
                     if any(f in mkt_lower for f in forbidden_mkts):
                         action = "SKIP"
-                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime) or First Half Over/Under required"
-                        factors.append(f"Market Guard: Prohibited market '{s.market}'. Only Over/Under (incl. Overtime) and First Half Over/Under are permitted.")
+                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime), First Half Over/Under, or Winner (incl. Overtime) [15-Up Early Payout] required"
+                        factors.append(f"Market Guard: Prohibited market '{s.market}'. Only Over/Under (incl. Overtime), First Half Over/Under, and Winner (incl. Overtime) are permitted.")
                         conf = 0
                         break
-                    if not any(k in text for k in ["over", "under", "total", "o/u"]):
+
+                    is_valid_ou = any(k in text for k in ["over", "under", "total", "o/u"])
+                    is_valid_win = any(k in text for k in ["winner", "moneyline", "to win", "ml"])
+                    if not (is_valid_ou or is_valid_win):
                         action = "SKIP"
-                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime) or First Half Over/Under required"
-                        factors.append("Market Guard: Only Over/Under (incl. Overtime) and First Half Over/Under are permitted.")
+                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime), First Half Over/Under, or Winner (incl. Overtime) [15-Up Early Payout] required"
+                        factors.append("Market Guard: Only Over/Under (incl. Overtime), First Half Over/Under, and Winner (incl. Overtime) with 15-Up Early Payout are permitted.")
                         conf = 0
                         break
 

@@ -7,14 +7,15 @@ import config
 
 
 def format_welcome_message(user_id: int, state: LedgerState) -> str:
-    return f"""🏀 *Welcome to My Bet Bot (NBA Totals Edition)!* 🏆
+    return f"""🏀 *Welcome to My Bet Bot (NBA Edition)!* 🏆
 _Your 30-Day Compound Growth & Profit-Locking Agent_
 
 🎯 *NBA Strategy Blueprint:*
 • Primary Focus: *NBA Basketball Exclusive* (games played every day through April — uninterrupted 30-day compounding!)
-• Strictly Allowed Options:
+• Strictly Allowed High-Conviction Options:
    1. *Over/Under Total Points (incl. Overtime)* — Cushioned full-game totals with free overtime points protection!
    2. *First Half Over/Under* — Early-settling 1st half totals, completely insulated from 4th-quarter garbage time!
+   3. *Winner (incl. Overtime) [15-Up Early Payout]* — Moneyline to-win with 15-Up lead protection: paid as an immediate full WIN if chosen team leads by 15+ points at any moment!
 • Flexible High-Conviction Format:
    • *1-Leg Solo Pick:* When a single top-tier line has odds between *1.50 and 1.60* with a 99% win conviction rating (eliminating second-leg exposure!).
    • *2-Leg Combo Ticket:* When combining two cushioned lines (*1.20 - 1.35*) to safely reach *1.500 - 1.800* combined odds.
@@ -28,7 +29,7 @@ _Your 30-Day Compound Growth & Profit-Locking Agent_
 • Total Withdrawn So Far: *{state.total_withdrawn:,.2f} {config.DEFAULT_CURRENCY}*
 • Active Win Streak: *{state.current_streak} 🔥*
 
-Tap *🎯 Today's Pick* or type `/today` to scan today's optimal NBA Over/Under setup!
+Tap *🎯 Today's Pick* or type `/today` to scan today's optimal NBA setup!
 """
 
 
@@ -85,8 +86,8 @@ _{prediction.title}_
             selections_text += f"   • 🏟️ *Why this team:* {s.why_picked_club}\n"
         if s.why_best_option:
             selections_text += f"   • 🎯 *Why best bet option:* {s.why_best_option}\n"
-        if s.early_payout_rule == "15-Up":
-            selections_text += "   • ⚡ *SportyBet 15-Up Early Payout: ELIGIBLE* (Paid as WIN if 15 points ahead)\n"
+        if s.early_payout_rule in ("15-Up", "2-Up", "1-Up") or s.is_2up_eligible:
+            selections_text += "   • ⚡ *SportyBet 15-Up Early Payout: ELIGIBLE* (Paid as full WIN if 15 pts ahead at any stage!)\n"
 
     factors_text = "\n".join([f"• {f}" for f in prediction.key_factors])
 

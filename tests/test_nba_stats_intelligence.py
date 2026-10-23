@@ -132,6 +132,82 @@ class TestNBAStatsIntelligence(unittest.TestCase):
         self.assertIn("Key Players", msg)
         self.assertIn("Safety Cushion", msg)
 
+    def test_evaluate_line_edge_winner_15up(self):
+        """Verify line evaluation models 15-Up Early Payout on Winner (incl. Overtime) market."""
+        edge = self.intel.evaluate_line_edge(
+            fixture="Boston Celtics vs Charlotte Hornets",
+            market="Winner (incl. Overtime)",
+            selection="Boston Celtics (To Win)",
+            odds=1.28,
+        )
+        self.assertTrue(edge.get("is_15up_eligible"))
+        self.assertEqual(edge.get("early_payout_rule"), "15-Up")
+        self.assertGreater(edge["cushion_pts"], 5.0)  # Boston projected to win by 10+ pts
+        self.assertGreaterEqual(edge["win_probability_pct"], 98.0)
+        self.assertIn("h2h_summary", edge)
+        self.assertIn("player_spotlight", edge)
+
+    def test_winner_15up_model_validation(self):
+        """Verify AIPrediction accepts Winner (incl. Overtime) under require_nba_totals=True."""
+        data = {
+            "title": "NBA Lock Ticket",
+            "selections": [
+                {
+                    "fixture": "Boston Celtics vs Charlotte Hornets",
+                    "sport": "basketball",
+                    "market": "Winner (incl. Overtime)",
+                    "selection": "Boston Celtics (To Win)",
+                    "odds": 1.28,
+                    "is_2up_eligible": True,
+                    "early_payout_rule": "15-Up",
+                },
+                {
+                    "fixture": "Denver Nuggets vs Utah Jazz",
+                    "sport": "basketball",
+                    "market": "First Half Over/Under",
+                    "selection": "Over 106.5 Points (1st Half)",
+                    "odds": 1.26,
+                },
+            ],
+            "combined_odds": 1.61,
+            "confidence_score": 10,
+            "risk_level": "LOW",
+            "recommended_action": "BET",
+        }
+        pred = AIPrediction.from_dict_flexible(data, current_balance=500.0, require_nba_totals=True)
+        self.assertEqual(pred.recommended_action, "BET")
+        self.assertEqual(len(pred.selections), 2)
+        self.assertTrue(pred.selections[0].is_2up_eligible)
+        self.assertEqual(pred.selections[0].early_payout_rule, "15-Up")
+
+    def test_telegram_pick_card_renders_15up_badge(self):
+        """Verify Telegram message renders 15-Up Early Payout badge."""
+        pred = AIPrediction(
+            title="NBA 15-Up Lock",
+            selections=[
+                MatchSelection(
+                    fixture="Boston Celtics vs Charlotte Hornets",
+                    sport="basketball",
+                    market="Winner (incl. Overtime)",
+                    selection="Boston Celtics (To Win)",
+                    odds=1.55,
+                    commence_time="Today",
+                    is_2up_eligible=True,
+                    early_payout_rule="15-Up",
+                    why_picked_club="Boston Celtics hold massive Net Rating advantage (+11.8).",
+                    why_best_option="Winner with 15-Up Early Payout: paid as full WIN when leading by 15 pts.",
+                )
+            ],
+            combined_odds=1.55,
+            confidence_score=10,
+            risk_level="LOW",
+            suggested_stake=500.0,
+            recommended_action="BET",
+        )
+        state = LedgerState(user_id=123456, current_day=1, current_balance=500.0)
+        msg = format_daily_pick_message(pred, state)
+        self.assertIn("15-Up Early Payout: ELIGIBLE", msg)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -741,7 +741,93 @@ class NBAIntelService:
         is_1st_half = any(k in target_text for k in ["1st half", "first half", "ht"])
         is_over = bool(re.search(r"\bover\b", target_text))
         is_under = bool(re.search(r"\bunder\b", target_text))
+        is_winner = any(k in target_text for k in ["winner", "moneyline", "to win", "ml"])
 
+        # -------------------------------------------------------------
+        # Branch A: Winner (incl. Overtime) with 15-Up Early Payout
+        # -------------------------------------------------------------
+        if is_winner:
+            home_pts = proj["home_projected_pts"]
+            away_pts = proj["away_projected_pts"]
+            is_home_pick = (
+                home.lower() in target_text
+                or any(w in target_text for w in home.lower().split() if len(w) > 2)
+                or selection.strip() in ("1", "Home")
+                or "home" in target_text
+            )
+            is_away_pick = (
+                away.lower() in target_text
+                or any(w in target_text for w in away.lower().split() if len(w) > 2)
+                or selection.strip() in ("2", "Away")
+                or "away" in target_text
+            )
+
+            if is_home_pick and not is_away_pick:
+                projected_margin = round(home_pts - away_pts, 1)
+                chosen_team = home
+                chosen_l10 = matchup_intel["home_l10"]
+                opp_l10 = matchup_intel["away_l10"]
+            elif is_away_pick and not is_home_pick:
+                projected_margin = round(away_pts - home_pts, 1)
+                chosen_team = away
+                chosen_l10 = matchup_intel["away_l10"]
+                opp_l10 = matchup_intel["home_l10"]
+            else:
+                projected_margin = round(abs(home_pts - away_pts), 1)
+                chosen_team = home if home_pts >= away_pts else away
+                chosen_l10 = matchup_intel["home_l10"] if home_pts >= away_pts else matchup_intel["away_l10"]
+                opp_l10 = matchup_intel["away_l10"] if home_pts >= away_pts else matchup_intel["home_l10"]
+
+            cushion = projected_margin
+            expected_pts = proj["home_projected_pts"] if chosen_team == home else proj["away_projected_pts"]
+
+            # 15-Up Early Payout Security Math:
+            # When backed team gains a 15-point lead at ANY point in the 48 minutes,
+            # the bet is settled immediately as a WON payout, rendering 4th-quarter comebacks harmless.
+            if cushion >= 12.0:
+                base_prob = 98.4
+            elif cushion >= 8.0:
+                base_prob = 97.2
+            elif cushion >= 5.0:
+                base_prob = 95.0
+            elif cushion >= 2.0:
+                base_prob = 92.0
+            else:
+                base_prob = max(80.0, 87.0 + cushion)
+
+            convergence_boost = 0.0
+            if chosen_l10.get("win_pct", 0) >= 70.0:
+                convergence_boost += 0.5
+            if opp_l10.get("win_pct", 0) <= 40.0:
+                convergence_boost += 0.4
+            if chosen_l10.get("ppg_scored", 0) > opp_l10.get("ppg_allowed", 0):
+                convergence_boost += 0.4
+            if matchup_intel.get("has_b2b_mismatch"):
+                convergence_boost += 0.4
+
+            final_win_prob = round(min(99.4, base_prob + convergence_boost), 1)
+            is_solo_candidate = (1.500 <= odds <= 1.600) and (cushion >= 8.0 or final_win_prob >= 98.0)
+
+            return {
+                "projected_pts": expected_pts,
+                "market_line": 0.0,
+                "cushion_pts": cushion,
+                "win_probability_pct": final_win_prob,
+                "is_solo_candidate": is_solo_candidate,
+                "is_15up_eligible": True,
+                "early_payout_rule": "15-Up",
+                "pace_tier": proj["pace_tier"],
+                "projected_pace": proj["projected_pace"],
+                "star_notes": proj["star_absence_notes"],
+                "h2h_summary": matchup_intel["h2h_summary"],
+                "home_l10_summary": matchup_intel["home_l10_summary"],
+                "away_l10_summary": matchup_intel["away_l10_summary"],
+                "player_spotlight": matchup_intel["player_spotlight"],
+            }
+
+        # -------------------------------------------------------------
+        # Branch B: Totals (Over / Under incl. OT and 1st Half)
+        # -------------------------------------------------------------
         expected_pts = proj["projected_1st_half_pts"] if is_1st_half else proj["projected_total_pts"]
 
         cushion = 0.0

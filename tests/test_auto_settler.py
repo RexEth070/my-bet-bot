@@ -483,11 +483,11 @@ class TestAutoSettlerIntegration(unittest.TestCase):
 
     def test_nba_totals_only_validation(self):
         from core.models import AIPrediction
-        # Reject non-totals market (Moneyline / Winner)
+        # Reject prohibited market (Point Spread / Handicap)
         bad_mkt_data = {
-            "title": "Moneyline Pick",
+            "title": "Point Spread Pick",
             "selections": [
-                {"fixture": "Boston vs Charlotte", "market": "Winner (incl. overtime)", "selection": "Boston", "odds": 1.25},
+                {"fixture": "Boston vs Charlotte", "market": "Point Spread (Handicap)", "selection": "Boston Celtics -8.5", "odds": 1.25},
                 {"fixture": "Denver vs Utah", "market": "Over/Under Total Points (incl. Overtime)", "selection": "Over 210.5", "odds": 1.28},
             ],
             "combined_odds": 1.60,
@@ -495,7 +495,22 @@ class TestAutoSettlerIntegration(unittest.TestCase):
         }
         pred_bad = AIPrediction.from_dict_flexible(bad_mkt_data, current_balance=500.0, require_nba_totals=True)
         self.assertEqual(pred_bad.recommended_action, "SKIP")
-        self.assertIn("strictly Over/Under (incl. Overtime) or First Half Over/Under required", pred_bad.title)
+        self.assertIn("Prohibited market", pred_bad.key_factors[-1])
+
+        # Accept valid Winner (incl. Overtime) with 15-Up Early Payout
+        winner_mkt_data = {
+            "title": "NBA Winner 15-Up Pick",
+            "selections": [
+                {"fixture": "Boston vs Charlotte", "market": "Winner (incl. Overtime)", "selection": "Boston Celtics (To Win)", "odds": 1.28},
+                {"fixture": "Denver vs Utah", "market": "First Half Over/Under", "selection": "Over 106.5 Points (1st Half)", "odds": 1.25},
+            ],
+            "combined_odds": 1.60,
+            "recommended_action": "BET",
+        }
+        pred_winner = AIPrediction.from_dict_flexible(winner_mkt_data, current_balance=500.0, require_nba_totals=True)
+        self.assertEqual(pred_winner.recommended_action, "BET")
+        self.assertTrue(pred_winner.selections[0].is_2up_eligible)
+        self.assertEqual(pred_winner.selections[0].early_payout_rule, "15-Up")
 
         # Accept valid Over/Under (incl. OT) and First Half Over/Under
         good_mkt_data = {

@@ -184,13 +184,15 @@ class AgentRouterClient:
                     clean_mkt = mkt.strip()
                     clean_sel = sel.strip()
                     mkt_lower = clean_mkt.lower()
-                    is_ou_market = any(k in mkt_lower or k in clean_sel.lower() for k in ["over", "under", "total"])
-                    is_forbidden = any(k in mkt_lower for k in ["winner", "moneyline", "spread", "handicap", "1x2", "goal", "btts"])
+                    sel_lower = clean_sel.lower()
+                    is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
+                    is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
+                    is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
 
-                    if 1.50 <= odds_val <= 1.60 and is_ou_market and not is_forbidden:
+                    if 1.50 <= odds_val <= 1.60 and (is_ou_market or is_win_market) and not is_forbidden:
                         team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
-                        is_1st_half = any(k in mkt_lower or k in clean_sel.lower() for k in ["1st half", "first half", "ht"])
-                        why_club = f"{team_lead} pace & shooting analytics indicate high scoring consistency aligned with this totals line."
+                        is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
+                        why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
                         edge_res = {}
                         try:
                             from data_sources.nba_intel import NBAIntelService
@@ -205,6 +207,13 @@ class AgentRouterClient:
                         except Exception:
                             pass
 
+                        if is_win_market:
+                            why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
+                        elif is_1st_half:
+                            why_opt = "1-Leg Solo Ticket (1st Half Over/Under) cashes at halftime, completely bypassing 4th-quarter garbage time."
+                        else:
+                            why_opt = "1-Leg Solo Ticket with odds >= 1.50 meets the daily compound target while completely eliminating 2nd leg risk."
+
                         selections.append(MatchSelection(
                             fixture=clean_fix,
                             sport="basketball",
@@ -212,10 +221,10 @@ class AgentRouterClient:
                             selection=clean_sel,
                             odds=odds_val,
                             commence_time="Today",
-                            is_2up_eligible=False,
-                            early_payout_rule=None,
+                            is_2up_eligible=bool(is_win_market),
+                            early_payout_rule="15-Up" if is_win_market else None,
                             why_picked_club=why_club,
-                            why_best_option="1-Leg Solo Ticket with odds >= 1.50 meets the daily compound target while completely eliminating 2nd leg risk.",
+                            why_best_option=why_opt,
                         ))
                         break
 
@@ -235,13 +244,15 @@ class AgentRouterClient:
                         clean_mkt = mkt.strip()
                         clean_sel = sel.strip()
                         mkt_lower = clean_mkt.lower()
-                        is_ou_market = any(k in mkt_lower or k in clean_sel.lower() for k in ["over", "under", "total"])
-                        is_forbidden = any(k in mkt_lower for k in ["winner", "moneyline", "spread", "handicap", "1x2", "goal", "btts"])
+                        sel_lower = clean_sel.lower()
+                        is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
+                        is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
+                        is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
 
-                        if 1.20 <= odds_val <= 1.60 and is_ou_market and not is_forbidden:
+                        if 1.20 <= odds_val <= 1.60 and (is_ou_market or is_win_market) and not is_forbidden:
                             team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
-                            is_1st_half = any(k in mkt_lower or k in clean_sel.lower() for k in ["1st half", "first half", "ht"])
-                            why_club = f"{team_lead} pace & shooting analytics indicate high scoring consistency aligned with this totals line."
+                            is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
+                            why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
                             try:
                                 from data_sources.nba_intel import NBAIntelService
                                 nba_service = NBAIntelService()
@@ -255,6 +266,13 @@ class AgentRouterClient:
                             except Exception:
                                 pass
 
+                            if is_win_market:
+                                why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
+                            elif is_1st_half:
+                                why_opt = "1st Half Over/Under provides early security, avoiding 4th-quarter garbage time."
+                            else:
+                                why_opt = "Over/Under Total Points (incl. Overtime) gives full cushion with free overtime points protection."
+
                             selections.append(MatchSelection(
                                 fixture=clean_fix,
                                 sport="basketball",
@@ -262,10 +280,10 @@ class AgentRouterClient:
                                 selection=clean_sel,
                                 odds=odds_val,
                                 commence_time="Today",
-                                is_2up_eligible=False,
-                                early_payout_rule=None,
+                                is_2up_eligible=bool(is_win_market),
+                                early_payout_rule="15-Up" if is_win_market else None,
                                 why_picked_club=why_club,
-                                why_best_option="1st Half Over/Under provides early security, avoiding 4th-quarter garbage time." if is_1st_half else "Over/Under Total Points (incl. Overtime) gives full cushion with free overtime points protection.",
+                                why_best_option=why_opt,
                             ))
                             seen_fixtures.add(clean_fix)
                             if len(selections) == 2:
