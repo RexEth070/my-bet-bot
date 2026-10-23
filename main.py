@@ -157,6 +157,26 @@ def main():
         scheduler = setup_scheduler(app=application, ledger=ledger, agent=agent, odds_api=odds_api)
         scheduler.start()
         logger.info("Scheduler started successfully in event loop.")
+        try:
+            from telegram import BotCommand
+            await application.bot.set_my_commands([
+                BotCommand("today", "Today's top NBA pick (1-Leg Solo or 2-Leg Combo)"),
+                BotCommand("reroll", "Generate alternative high-conviction NBA pick"),
+                BotCommand("nba", "Review active NBA totals strategy & parameters"),
+                BotCommand("placed", "Confirm bet placed & start auto-settlement"),
+                BotCommand("stats", "Win rate %, streaks, and performance stats"),
+                BotCommand("clearall", "Completely wipe old memories & reset to Day 1"),
+                BotCommand("clear", "Discard current prediction from memory"),
+                BotCommand("helper", "SportyBet fast betslip guide & booking code"),
+                BotCommand("balance", "Check current bankroll & win streak"),
+                BotCommand("cycle", "30-Day compound projection chart"),
+                BotCommand("bets", "Recent bets ledger"),
+                BotCommand("reset", "Reset challenge to Day 1"),
+                BotCommand("help", "Available commands & guide"),
+            ])
+            logger.info("Telegram Bot menu commands updated successfully.")
+        except Exception as ce:
+            logger.warning(f"Could not register Telegram bot commands: {ce}")
 
     app = create_bot_application(
         token=token,

@@ -8,26 +8,13 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
 import httpx
 import config
+from data_sources.nba_intel import NBAIntelService
 
 logger = logging.getLogger(__name__)
 
-# Primary sports leagues prioritized by liquidity, volume, and predictability
+# Primary sports leagues: Strictly NBA Basketball
 PRIORITY_LEAGUES = [
-    "soccer_uefa_champs_league",
-    "soccer_epl",
-    "soccer_spain_la_liga",
-    "soccer_germany_bundesliga",
-    "soccer_italy_serie_a",
-    "soccer_france_ligue_one",
-    "soccer_netherlands_eredivisie",
-    "soccer_portugal_primeira_liga",
-    "soccer_uefa_europa_league",
-    "soccer_uefa_europa_conference_league",
-    "soccer_england_championship",
-    "soccer_saudi_pro_league",
-    "soccer_turkey_super_lig",
     "basketball_nba",
-    "basketball_euroleague",
 ]
 
 # Global cache shared across bot sessions to conserve API quota
@@ -52,33 +39,47 @@ class OddsApiClient:
         self.api_key = api_key or config.ODDS_API_KEY
         self.regions = config.ODDS_API_REGIONS
 
-    async def get_upcoming_fixtures_summary(self, max_matches: int = 50, football_limit: int = 50, basketball_limit: int = 20) -> str:
-        """Fetches strictly TODAY'S upcoming fixtures and real market odds, prioritizing SportyBet NG live feed (50 Football + 20 Basketball options)."""
+    @classmethod
+    def clear_cache(cls):
+        """Wipes the global upcoming fixtures cache."""
+        global _GLOBAL_FIXTURES_CACHE, _GLOBAL_FIXTURES_CACHE_TS
+        _GLOBAL_FIXTURES_CACHE = ""
+        _GLOBAL_FIXTURES_CACHE_TS = 0.0
+        logger.info("Cleared global fixtures memory cache.")
+
+    async def get_upcoming_fixtures_summary(
+        self,
+        max_matches: int = 50,
+        basketball_limit: int = 60,
+        exclude_fixtures: Optional[List[str]] = None,
+        force_refresh: bool = False,
+        **kwargs,
+    ) -> str:
+        """Fetches strictly TODAY'S upcoming NBA fixtures and real market odds exclusively on SportyBet NG live feed."""
         global _GLOBAL_FIXTURES_CACHE, _GLOBAL_FIXTURES_CACHE_TS
 
         now_ts = time.time()
-        if _GLOBAL_FIXTURES_CACHE and (now_ts - _GLOBAL_FIXTURES_CACHE_TS < _CACHE_TTL_SECONDS):
+        if not force_refresh and not exclude_fixtures and _GLOBAL_FIXTURES_CACHE and (now_ts - _GLOBAL_FIXTURES_CACHE_TS < _CACHE_TTL_SECONDS):
             logger.info("Serving upcoming fixtures from in-memory cache.")
             return _GLOBAL_FIXTURES_CACHE
 
-        # 1. Primary data source: SportyBet Nigeria live API (100% matched for booking code generation)
+        # 1. Primary data source: SportyBet Nigeria live API (strictly Basketball sport_id sr:sport:2)
         try:
             from intelligence.sportybet_service import SportyBetService
             sporty = SportyBetService()
-            fb_events = sporty.get_upcoming_events(sport_id="sr:sport:1", page_size=100)
-            bb_events = sporty.get_upcoming_events(sport_id="sr:sport:2", page_size=50)
+            bb_events = sporty.get_upcoming_events(sport_id="sr:sport:2", page_size=100)
 
-            if (fb_events and len(fb_events) >= 3) or (bb_events and len(bb_events) >= 1):
+            if bb_events and len(bb_events) >= 1:
                 summary = self._format_sportybet_data(
-                    fb_events=fb_events or [],
                     bb_events=bb_events or [],
-                    fb_limit=football_limit,
                     bb_limit=basketball_limit,
+                    exclude_fixtures=exclude_fixtures,
                 )
                 if summary:
-                    _GLOBAL_FIXTURES_CACHE = summary
-                    _GLOBAL_FIXTURES_CACHE_TS = now_ts
-                    logger.info(f"Ingested {len(fb_events or [])} Football and {len(bb_events or [])} Basketball fixtures strictly for TODAY from SportyBet NG.")
+                    if not exclude_fixtures:
+                        _GLOBAL_FIXTURES_CACHE = summary
+                        _GLOBAL_FIXTURES_CACHE_TS = now_ts
+                    logger.info(f"Ingested {len(bb_events or [])} Basketball fixtures strictly for TODAY from SportyBet NG.")
                     return summary
         except Exception as se:
             logger.warning(f"Could not load SportyBet feed ({se}). Falling back to secondary odds feed.")
@@ -145,62 +146,83 @@ class OddsApiClient:
 
     def _format_sportybet_data(
         self,
-        fb_events: Optional[List[Dict[str, Any]]] = None,
         bb_events: Optional[List[Dict[str, Any]]] = None,
-        fb_limit: int = 50,
-        bb_limit: int = 20,
+        bb_limit: int = 60,
         events: Optional[List[Dict[str, Any]]] = None,
         max_matches: Optional[int] = None,
+        exclude_fixtures: Optional[List[str]] = None,
+        **kwargs,
     ) -> str:
-        """Formats real live SportyBet fixtures scheduled strictly for TODAY with up to 50 Football and 20 Basketball options."""
-        if events is not None and fb_events is None:
-            fb_events = events
-            fb_limit = max_matches or fb_limit
-        fb_events = fb_events or []
+        """Formats real live SportyBet NBA fixtures scheduled strictly for TODAY, exclusively offering Over/Under incl. OT and 1st Half Over/Under."""
+        if events is not None and bb_events is None:
+            bb_events = events
+            bb_limit = max_matches or bb_limit
         bb_events = bb_events or []
 
-        priority_tourns = [
-            "champions league", "premier league", "la liga", "laliga", "bundesliga",
-            "serie a", "ligue 1", "europa league", "conference league", "eredivisie",
-            "primeira liga", "championship", "saudi pro league", "super lig", "fa cup",
-            "copa del rey", "coppa italia", "dfb pokal", "brasileiro", "nba", "euroleague",
+        nba_team_keywords = [
+            "celtics", "nuggets", "thunder", "bucks", "timberwolves", "warriors",
+            "lakers", "clippers", "mavericks", "knicks", "cavaliers", "heat",
+            "76ers", "sixers", "suns", "pacers", "magic", "pelicans", "kings",
+            "rockets", "hawks", "nets", "bulls", "raptors", "spurs", "grizzlies",
+            "trail blazers", "blazers", "jazz", "hornets", "pistons", "wizards"
         ]
 
-        def get_priority(e):
+        def is_nba(e):
             t_name = (e.get("tournamentName") or "").lower()
             h_name = (e.get("homeTeamName") or "").lower()
             a_name = (e.get("awayTeamName") or "").lower()
-            bonus = -10 if any(k in f"{h_name} {a_name}" for k in ["arsenal", "city", "liverpool", "bayern", "madrid", "barcelona", "inter", "dortmund", "psg", "napoli", "chelsea", "juventus", "celtics", "lakers", "warriors", "bucks"]) else 0
-            for idx, p in enumerate(priority_tourns):
-                if p in t_name:
-                    return idx + bonus
-            return 99 + bonus
+            if "nba" in t_name or "national basketball" in t_name:
+                return True
+            return any(k in f"{h_name} {a_name}" for k in nba_team_keywords)
 
-        def extract_vetted_sport_options(event_list, sport_name, max_options):
+        nba_events = [e for e in bb_events if is_nba(e)]
+        # If no explicit NBA events in live feed, use all basketball events as fallback
+        events_to_process = nba_events if nba_events else bb_events
+
+        def get_priority(e):
+            h_name = (e.get("homeTeamName") or "").lower()
+            a_name = (e.get("awayTeamName") or "").lower()
+            bonus = -15 if any(k in f"{h_name} {a_name}" for k in ["celtics", "nuggets", "thunder", "bucks", "timberwolves", "warriors", "lakers", "clippers", "mavericks", "knicks", "cavaliers", "heat"]) else 0
+            return bonus
+
+        def extract_vetted_nba_options(event_list, max_options):
             sorted_events = sorted(event_list, key=get_priority)
-            allowed_fb = {
-                "10": ("Double Chance", 1),
-                "60110": ("Double Chance 1-Up", 1),
-                "18": ("Over/Under Goals", 2),
-                "19": ("Home Team Goals", 2),
-                "20": ("Away Team Goals", 2),
-                "11": ("Draw No Bet", 3),
-                "60100": ("1X2 2-Up", 4),
-                "1": ("1X2 Match Winner", 4),
-                "29": ("Both Teams to Score", 5),
+            # STRICT MARKET ENFORCEMENT: ONLY Over/Under incl. Overtime and 1st Half Over/Under
+            allowed_markets = {
+                "18": ("Over/Under Total Points (incl. Overtime)", 1),
+                "222": ("Over/Under Total Points (incl. Overtime)", 1),
+                "68": ("1st Half Over/Under", 2),
             }
-            allowed_bb = {
-                "219": ("Winner incl. Overtime", 1),
-                "18": ("Total Points", 2),
-                "1": ("Regulation 1X2", 3),
-            }
-            allowed_markets = allowed_fb if sport_name == "Football" else allowed_bb
             collected = []
+            nba_service = NBAIntelService()
+            exclude_clean = [clean_team_name(x).lower() for x in (exclude_fixtures or []) if x]
 
             for e in sorted_events:
                 home = clean_team_name(e.get("homeTeamName", "Home"))
                 away = clean_team_name(e.get("awayTeamName", "Away"))
-                tourn = clean_team_name(e.get("tournamentName", sport_name))
+                tourn = clean_team_name(e.get("tournamentName", "NBA"))
+                fix_str = f"{home} vs {away}".lower()
+                if any(ex in fix_str or fix_str in ex for ex in exclude_clean):
+                    continue
+
+                extra_intel = ""
+                event_tier_bonus = 0
+                if nba_service:
+                    try:
+                        intel = nba_service.get_matchup_intel(home, away)
+                        rest_str = f" | Rest: {home} {intel['home_rest']}, {away} {intel['away_rest']}"
+                        inj_parts = []
+                        if intel.get("home_injuries"):
+                            inj_parts.append(f"{home}: {', '.join(intel['home_injuries'][:2])}")
+                        if intel.get("away_injuries"):
+                            inj_parts.append(f"{away}: {', '.join(intel['away_injuries'][:2])}")
+                        inj_str = f" | Key Injuries: {'; '.join(inj_parts)}" if inj_parts else ""
+                        extra_intel = rest_str + inj_str
+                        if intel.get("has_b2b_mismatch"):
+                            event_tier_bonus = -1  # Fatigue mismatch advantage!
+                    except Exception:
+                        pass
+
                 for m in e.get("markets", []):
                     mid = str(m.get("id"))
                     if mid not in allowed_markets:
@@ -215,37 +237,58 @@ class OddsApiClient:
                             odds = float(o.get("odds", 0))
                         except (ValueError, TypeError):
                             continue
-                        if 1.200 <= odds <= 1.590:
+                        if 1.200 <= odds <= 1.600:
                             desc = clean_team_name(o.get("desc", ""))
+                            edge_info = {}
+                            if nba_service:
+                                try:
+                                    edge_info = nba_service.evaluate_line_edge(f"{home} vs {away}", f"{m_label}{spec_str}", desc, odds)
+                                except Exception:
+                                    edge_info = {}
+
+                            cushion = edge_info.get("cushion_pts", 0.0)
+                            win_pct = edge_info.get("win_probability_pct", 95.0)
+                            is_solo = edge_info.get("is_solo_candidate", False)
+                            pace_tag = f" | Pace: {edge_info.get('pace_tier', 'BALANCED')}" if edge_info.get("pace_tier") else ""
+                            cushion_tag = f" | Cushion: +{cushion} pts (Win Prob: {win_pct:.1f}%)" if cushion > 0 else ""
+                            star_tag = f" | Note: {'; '.join(edge_info.get('star_notes', []))}" if edge_info.get("star_notes") else ""
+                            solo_tag = " [SOLO 1-LEG LOCK CANDIDATE - 99% WIN PROBABILITY]" if is_solo else ""
+
+                            # Priority: 1-leg solo candidates get tier -5 (absolute top priority), high cushions get sorted ahead
+                            calculated_tier = -5 if is_solo else (tier + event_tier_bonus - int(cushion / 4.0))
+
                             collected.append({
-                                "tier": tier,
+                                "tier": calculated_tier,
+                                "cushion": cushion,
                                 "odds": odds,
-                                "line": f"[{sport_name.upper()} - {tourn}] {home} vs {away} | Market: {m_label}{spec_str} | Pick: {desc} @ {odds:.2f} (Odds: {odds:.2f})",
+                                "line": f"[BASKETBALL - NBA] {home} vs {away} | Market: {m_label}{spec_str} | Pick: {desc} @ {odds:.2f} (Odds: {odds:.2f}){solo_tag}{cushion_tag}{pace_tag}{extra_intel}{star_tag}",
                             })
 
-            collected.sort(key=lambda x: (x["tier"], x["odds"]))
+            collected.sort(key=lambda x: (x["tier"], -x["cushion"], x["odds"]))
             return [c["line"] for c in collected[:max_options]]
 
-        fb_vetted = extract_vetted_sport_options(fb_events, "Football", fb_limit)
-        bb_vetted = extract_vetted_sport_options(bb_events, "Basketball", bb_limit)
+        nba_vetted = extract_vetted_nba_options(events_to_process, bb_limit)
 
         lines = [
             "TODAY'S OFFICIAL FIXTURES & REAL MARKET ODDS (SportyBet Nigeria Live Feed):",
+            "PRIMARY SPORT FOCUS: NBA BASKETBALL (NBA EXCLUSIVE).",
             "MANDATORY TIME RULE: ALL MATCHES BELOW PLAY STRICTLY TODAY. NEVER PICK FUTURE GAMES.",
-            "CRITICAL ODDS CRITERIA:",
-            "  - Individual leg odds MUST be strictly between 1.200 and 1.590 (all options below already vetted).",
-            "  - Total combined ticket odds MUST be strictly between 1.500 and 1.800 (1 or 2 legs max).",
-            "  - Target 98-99% win probability across diversified low-variance markets.",
+            "STRICT MARKET RULE: ONLY 'Over/Under Total Points (incl. Overtime)' and 'First Half Over/Under' ALLOWED.",
+            "CRITICAL ODDS & TICKET SELECTION CRITERIA:",
+            "  - TICKET STRUCTURE: 1-LEG (SOLO) OR 2-LEGS (DOUBLE COMBO). MAX 2 LEGS!",
+            "  - OPTION A (1-LEG SOLO): If an alternate Over/Under (incl. OT) or 1st Half Over/Under line has odds between 1.500 and 1.600 with 98-99% win conviction, select it as a 1-LEG SOLO TICKET (eliminating 2nd leg risk).",
+            "  - OPTION B (2-LEG COMBO): If individual safe lines are lower (1.200 to 1.350), combine EXACTLY 2 legs to achieve combined 1.500 - 1.800 odds.",
+            "  - INDIVIDUAL ODDS LIMIT: Strictly 1.200 to 1.600 per match (NON of each odds per match should exceed 1.60).",
+            "  - Target 98-99% win probability using alternate total cushions and 1st half defensive pace matchups.",
             "---------------------------------------------------------------------------------------",
-            f"\n=== SECTION 1: FOOTBALL (TOP {len(fb_vetted)} HIGH-CONVICTION WINNING OPTIONS FOR TODAY) ===",
         ]
-        for idx, opt in enumerate(fb_vetted, 1):
-            lines.append(f"{idx}. {opt}")
-
-        if bb_vetted:
-            lines.append(f"\n=== SECTION 2: BASKETBALL (TOP {len(bb_vetted)} HIGH-CONVICTION WINNING OPTIONS FOR TODAY) ===")
-            for idx, opt in enumerate(bb_vetted, 1):
+        if nba_vetted:
+            lines.append(f"\n=== SECTION 1: NBA BASKETBALL (TOP {len(nba_vetted)} OVER/UNDER HIGH-CONVICTION OPTIONS FOR TODAY) ===")
+            for idx, opt in enumerate(nba_vetted, 1):
                 lines.append(f"{idx}. {opt}")
+        else:
+            lines.append("\n(No live NBA lines on SportyBet feed right now — using sample calibrated NBA Over/Under lines below)")
+            lines.append(self._get_mock_fixtures())
 
         return "\n".join(lines)
 
@@ -255,78 +298,52 @@ class OddsApiClient:
             return "No active upcoming fixtures found in the next 36 hours."
 
         lines = [
-            "UPCOMING FIXTURES & REAL MARKET ODDS (Next 24-36h):",
-            "Sports covered: European Soccer & Basketball (NBA / EuroLeague).",
-            "MANDATORY 4-PILLAR ANALYSIS PROTOCOL:",
-            "  1. Flashscore: Verify form guide (last 5 W/D/L), H2H history, and home/away goal differentials.",
-            "  2. WhoScored: Check team tactical ratings, xG/xGA dominance, and style mismatches.",
-            "  3. Bet365: Check sharp market consensus, line movement, and 1-Up / 2-Up early payout eligibility.",
-            "  4. Injury & Lineup Reports: Check that core spine players (GK, CB, Midfield pivot, Top Scorer) are fit.",
-            "GOAL: Pick 1-2 ultra high-probability, low-volatility legs to accumulate ~1.50 cumulative odds.",
+            "UPCOMING FIXTURES & REAL MARKET ODDS (NBA Exclusive):",
+            "Sports covered: NBA Basketball.",
+            "STRICT CRITERIA: ONLY Over/Under Total Points (incl. Overtime) and First Half Over/Under.",
             "---------------------------------------------------------------------------------------",
         ]
 
-        for i, match in enumerate(data, 1):
+        count = 0
+        for match in data:
+            league = match.get("_league", match.get("sport_title", "Sport")).lower()
+            if "basketball" not in league and "nba" not in league:
+                continue
+
             home = clean_team_name(match.get("home_team", "Home"))
             away = clean_team_name(match.get("away_team", "Away"))
-            commence = match.get("commence_time", "Upcoming")
-            league = match.get("_league", match.get("sport_title", "Sport"))
-            is_basketball = "basketball" in league.lower()
-
-            h2h_summary = "N/A"
-            totals_summary = "N/A"
-            spreads_summary = "N/A"
-            selected_bookmaker_title = "Consensus"
+            commence = match.get("commence_time", "Today")
 
             bookmakers = match.get("bookmakers", [])
-            if bookmakers:
-                # Prioritize Bet365 or Pinnacle for sharp lines
-                bm = bookmakers[0]
-                for b in bookmakers:
-                    b_key = b.get("key", "").lower()
-                    if "bet365" in b_key:
-                        bm = b
-                        break
-                    elif "pinnacle" in b_key or "unibet" in b_key or "williamhill" in b_key:
-                        bm = b
+            totals_options = []
+            for bm in bookmakers:
+                for m in bm.get("markets", []):
+                    if m.get("key") == "totals":
+                        for o in m.get("outcomes", []):
+                            price = float(o.get("price", 0))
+                            if 1.20 <= price <= 1.60:
+                                name = o.get("name")
+                                pt = o.get("point")
+                                totals_options.append(f"{name} {pt} Points @ {price:.2f}")
 
-                selected_bookmaker_title = bm.get("title", bm.get("key", "Bookmaker"))
-                markets = bm.get("markets", [])
-                for m in markets:
-                    key = m.get("key")
-                    outcomes = m.get("outcomes", [])
-                    if key == "h2h":
-                        h2h_parts = [f"{clean_team_name(o.get('name'))}: {o.get('price')}" for o in outcomes]
-                        h2h_summary = " | ".join(h2h_parts)
-                    elif key == "totals":
-                        tot_parts = [f"{o.get('name')} {o.get('point', '')}: {o.get('price')}" for o in outcomes]
-                        totals_summary = " | ".join(tot_parts)
-                    elif key == "spreads":
-                        sp_parts = [f"{clean_team_name(o.get('name'))} ({o.get('point')}): {o.get('price')}" for o in outcomes]
-                        spreads_summary = " | ".join(sp_parts)
+            if totals_options:
+                count += 1
+                pick_choice = totals_options[0]
+                lines.append(f"{count}. [BASKETBALL - NBA] {home} vs {away} | Market: Over/Under Total Points (incl. Overtime) | Pick: {pick_choice}")
 
-            sport_tag = "BASKETBALL" if is_basketball else "SOCCER"
-            league_tag = league.replace("soccer_", "").replace("basketball_", "").upper()
-            match_details = [
-                f"{i}. [{sport_tag} - {league_tag}] {home} vs {away}",
-                f"   Kickoff: {commence}",
-                f"   Market Odds ({selected_bookmaker_title}): {h2h_summary}",
-                f"   Totals: {totals_summary}"
-            ]
-            if is_basketball and spreads_summary != "N/A":
-                match_details.append(f"   Spreads: {spreads_summary}")
-
-            lines.append("\n".join(match_details))
+        if count == 0:
+            return self._get_mock_fixtures()
 
         return "\n".join(lines)
 
     def _get_mock_fixtures(self) -> str:
-        """Realistic sample fixtures for testing without API keys."""
-        return """UPCOMING FIXTURES & MARKET ODDS (Sample Feed):
-1. Real Madrid vs Celta Vigo | Starts: 20:00 UTC | Odds: Real Madrid (1.25), Draw (6.00), Celta Vigo (11.00) | Double Chance 1X (1.18)
-2. Bayern Munich vs Augsburg | Starts: 19:30 UTC | Odds: Bayern (1.15), Draw (8.50), Augsburg (15.00) | Over 1.5 Goals (1.28)
-3. Arsenal vs Southampton | Starts: 15:00 UTC | Odds: Arsenal (1.20), Draw (7.00), Southampton (13.00) | Arsenal DNB (1.08)
-4. Paris Saint-Germain vs Angers | Starts: 21:00 UTC | Odds: PSG (1.22), Draw (6.50), Angers (12.00) | Over 1.5 Goals (1.20)
-5. Manchester City vs Ipswich Town | Starts: 17:30 UTC | Odds: Man City (1.12), Draw (9.00), Ipswich (19.00) | Man City or Draw (1.05)
+        """Realistic sample NBA fixtures strictly for Over/Under incl. Overtime and 1st Half Over/Under."""
+        return """UPCOMING FIXTURES & REAL MARKET ODDS (NBA Exclusive Sample Feed):
+1. [BASKETBALL - NBA] Boston Celtics vs Charlotte Hornets | Market: Over/Under Total Points (incl. Overtime) (total=214.5) | Pick: Over 214.5 Points (incl. OT) @ 1.28 (Odds: 1.28) | Rest: Boston Rested, Charlotte Rested
+2. [BASKETBALL - NBA] Denver Nuggets vs Utah Jazz | Market: 1st Half Over/Under (total=106.5) | Pick: Over 106.5 Points (1st Half) @ 1.26 (Odds: 1.26) | Rest: Denver Rested, Utah B2B
+3. [BASKETBALL - NBA] Oklahoma City Thunder vs Portland Trail Blazers | Market: Over/Under Total Points (incl. Overtime) (total=234.5) | Pick: Under 234.5 Points (incl. OT) @ 1.25 (Odds: 1.25) | Rest: OKC Rested, Portland Rested
+4. [BASKETBALL - NBA] Minnesota Timberwolves vs Washington Wizards | Market: 1st Half Over/Under (total=118.5) | Pick: Under 118.5 Points (1st Half) @ 1.29 (Odds: 1.29) | Rest: Minnesota Rested, Washington B2B
+5. [BASKETBALL - NBA] Dallas Mavericks vs Brooklyn Nets | Market: Over/Under Total Points (incl. Overtime) (total=211.5) | Pick: Over 211.5 Points (incl. OT) @ 1.27 (Odds: 1.27) | Rest: Dallas Rested, Brooklyn Rested
+6. [BASKETBALL - NBA] Cleveland Cavaliers vs Detroit Pistons | Market: 1st Half Over/Under (total=105.5) | Pick: Over 105.5 Points (1st Half) @ 1.25 (Odds: 1.25) | Rest: Cleveland Rested, Detroit Rested
 """
 

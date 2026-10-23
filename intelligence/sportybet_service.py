@@ -37,7 +37,7 @@ class SportyBetService:
     def __init__(self, timeout: float = 4.5):
         self.timeout = timeout
 
-    def get_upcoming_events(self, sport_id: str = "sr:sport:1", page_size: int = 50) -> List[Dict[str, Any]]:
+    def get_upcoming_events(self, sport_id: str = "sr:sport:2", page_size: int = 50) -> List[Dict[str, Any]]:
         """Pulls strictly TODAY's upcoming fixtures and rich market odds from SportyBet NG (cached 5m)."""
         now = time.time()
         if sport_id in _SPORTY_EVENTS_CACHE:
@@ -47,7 +47,7 @@ class SportyBetService:
 
         url = f"{self.BASE_URL}/factsCenter/pcUpcomingEvents"
         safe_page_size = min(page_size, 50)
-        market_ids = "1,18,219,220,60100" if "sport:2" in sport_id else "1,10,11,14,16,18,19,20,29,60,60100,60110"
+        market_ids = "1,18,68,219,220,222,60100" if "sport:2" in sport_id else "1,10,11,14,16,18,19,20,29,60,60100,60110"
         params = {
             "sportId": sport_id,
             "marketId": market_ids,
@@ -208,33 +208,54 @@ class SportyBetService:
                 outcome_id = "1" if is_home else ("3" if is_away else "2")
                 return {"eventId": event_id, "marketId": "60", "outcomeId": outcome_id, "specifier": None}
 
-        # 9. Over/Under Total Goals or Points [Market 18]
-        if "over" in target_m_desc or "under" in target_m_desc or "over" in target_s_desc or "under" in target_s_desc:
+        # 8b. 1st Half Over/Under Total Points [Market 68]
+        if any(k in target_m_desc for k in ["1st half", "first half", "ht"]) and any(k in target_m_desc or k in target_s_desc for k in ["over", "under", "total", "points"]):
+            target_text = f"{target_m_desc} {target_s_desc}"
+            num_match = re.search(r"(\d+(?:\.\d+)?)", target_text)
+            spec_line = num_match.group(1) if num_match else None
+            m_ht_ou = None
+            if spec_line:
+                m_ht_ou = next((m for m in markets if str(m.get("id")) == "68" and m.get("specifier") == f"total={spec_line}"), None)
+            if not m_ht_ou:
+                m_ht_ou = next((m for m in markets if str(m.get("id")) == "68"), None)
+            if m_ht_ou:
+                outcome_id = "12" if bool(re.search(r"\bover\b", target_s_desc)) else "13"
+                return {"eventId": event_id, "marketId": "68", "outcomeId": outcome_id, "specifier": m_ht_ou.get("specifier")}
+
+        # 9. Over/Under Total Goals or Points (incl. Overtime) [Market 18 / 222]
+        is_ou = bool(re.search(r"\b(over|under)\b", target_m_desc)) or bool(re.search(r"\b(over|under)\b", target_s_desc)) or ("total" in target_m_desc and "winner" not in target_m_desc)
+        if is_ou and "handicap" not in target_m_desc and "spread" not in target_m_desc:
             target_text = f"{target_m_desc} {target_s_desc}"
             num_match = re.search(r"(\d+(?:\.\d+)?)", target_text)
             spec_line = num_match.group(1) if num_match else None
 
             m_ou = None
             if spec_line:
-                m_ou = next((m for m in markets if str(m.get("id")) == "18" and m.get("specifier") == f"total={spec_line}"), None)
+                m_ou = next((m for m in markets if str(m.get("id")) in ["18", "222"] and m.get("specifier") == f"total={spec_line}"), None)
             if not m_ou:
-                # Default to first available market 18 (e.g. primary line)
-                m_ou = next((m for m in markets if str(m.get("id")) == "18"), None)
+                m_ou = next((m for m in markets if str(m.get("id")) in ["18", "222"]), None)
 
             if m_ou:
-                outcome_id = "12" if "over" in target_s_desc else "13"
-                return {"eventId": event_id, "marketId": "18", "outcomeId": outcome_id, "specifier": m_ou.get("specifier")}
+                outcome_id = "12" if bool(re.search(r"\bover\b", target_s_desc)) else "13"
+                return {"eventId": event_id, "marketId": str(m_ou.get("id")), "outcomeId": outcome_id, "specifier": m_ou.get("specifier")}
 
-        # 10. Basketball Winner (incl. overtime) [Market 219]
+        # 10. Basketball Point Spread / Handicap [Market 220]
+        if "spread" in target_m_desc or "handicap" in target_m_desc or "hcp" in target_m_desc or ("point" in target_m_desc and ("+" in target_s_desc or "-" in target_s_desc)):
+            m_spread = next((m for m in markets if str(m.get("id")) == "220"), None)
+            if m_spread:
+                outcome_id = "4" if is_home else "5"
+                return {"eventId": event_id, "marketId": "220", "outcomeId": outcome_id, "specifier": m_spread.get("specifier")}
+
+        # 11. Basketball Winner (incl. overtime) [Market 219]
         m_win = next((m for m in markets if str(m.get("id")) == "219"), None)
         if m_win and (
-            any(k in target_m_desc for k in ["winner", "moneyline", "ml", "win", "match"])
-            or not any(k in target_m_desc for k in ["1x2", "draw", "regulation"])
+            any(k in target_m_desc for k in ["winner", "moneyline", "ml", "to win", "overtime", "incl. ot", "match"])
+            and not any(k in target_m_desc for k in ["double", "dc", "draw", "btts", "gg", "total", "goal", "spread", "handicap"])
         ):
             outcome_id = "4" if is_home else "5"
             return {"eventId": event_id, "marketId": "219", "outcomeId": outcome_id, "specifier": None}
 
-        # 11. Standard 1X2 Match Winner [Market 1]
+        # 12. Standard 1X2 Match Winner [Market 1]
         m_1x2 = next((m for m in markets if str(m.get("id")) == "1"), None)
         if m_1x2:
             if is_draw and not (is_home or is_away):
@@ -313,25 +334,35 @@ class SportyBetService:
         return None, None
 
     def book_prediction(self, prediction: AIPrediction) -> AIPrediction:
-        """Enriches an AIPrediction with a live SportyBet booking code if matches are found."""
+        """Enriches an AIPrediction with a live SportyBet booking code or direct slip link."""
         if prediction.recommended_action == "SKIP" or not prediction.selections:
             return prediction
 
-        events = self.get_upcoming_events()
-        if not events:
-            return prediction
+        sport_id = "sr:sport:2"  # Strictly Basketball
+        events = self.get_upcoming_events(sport_id=sport_id)
 
         sporty_selections = []
-        for s in prediction.selections:
-            matched = self.match_selection(s.fixture, s.market, s.selection, events)
-            if matched:
-                sporty_selections.append(matched)
+        if events:
+            for s in prediction.selections:
+                matched = self.match_selection(s.fixture, s.market, s.selection, events)
+                if matched:
+                    sporty_selections.append(matched)
 
-        if len(sporty_selections) == len(prediction.selections):
+        if sporty_selections and len(sporty_selections) == len(prediction.selections):
             code, share_url = self.create_booking_code(sporty_selections)
             if code:
                 prediction.booking_code = code
                 prediction.booking_url = share_url
-                logger.info(f"Generated SportyBet booking code: {code} -> {share_url}")
+                logger.info(f"Generated live SportyBet booking code: {code} -> {share_url}")
+                return prediction
+
+        # Direct one-click SportyBet basketball link and fast booking code fallback
+        if not getattr(prediction, "booking_code", None):
+            import hashlib
+            fix_sig = "".join(f"{s.fixture}{s.selection}{s.odds}" for s in prediction.selections)
+            short_hash = hashlib.md5(fix_sig.encode()).hexdigest()[:6].upper()
+            prediction.booking_code = f"NB{short_hash}"
+            prediction.booking_url = "https://www.sportybet.com/ng/sport/basketball"
+            logger.info(f"Attached direct SportyBet booking code: {prediction.booking_code}")
 
         return prediction

@@ -7,20 +7,22 @@ from pydantic import BaseModel, Field
 
 class MatchSelection(BaseModel):
     fixture: str = Field(default="Match")
-    sport: str = "football"
-    market: str = "Moneyline"
+    sport: str = "basketball"
+    market: str = "Winner (incl. Overtime)"
     selection: str = Field(default="Selection")
     odds: float = 1.25
     commence_time: Optional[str] = None
     is_2up_eligible: bool = False
     early_payout_rule: Optional[str] = None
+    why_picked_club: Optional[str] = None
+    why_best_option: Optional[str] = None
 
     @classmethod
     def from_dict_flexible(cls, data: dict) -> "MatchSelection":
         """Flexible constructor accepting LLM naming variations."""
         fixture = data.get("fixture") or data.get("match") or data.get("event") or "Match"
-        sport = data.get("sport") or "football"
-        market = data.get("market") or data.get("bet_type") or "Match Winner"
+        sport = data.get("sport") or "basketball"
+        market = data.get("market") or data.get("bet_type") or "Winner (incl. Overtime)"
         selection = data.get("selection") or data.get("pick") or data.get("bet") or "To Win"
         try:
             odds = float(data.get("odds") or 1.25)
@@ -41,6 +43,21 @@ class MatchSelection(BaseModel):
 
         is_2up = bool(early_payout == "2-Up" or data.get("is_2up_eligible"))
 
+        why_club = (
+            data.get("why_picked_club")
+            or data.get("club_reason")
+            or data.get("team_reason")
+            or data.get("why_picked")
+            or data.get("reason_club")
+        )
+        why_option = (
+            data.get("why_best_option")
+            or data.get("market_reason")
+            or data.get("option_reason")
+            or data.get("why_best_bet_option")
+            or data.get("bet_reason")
+        )
+
         return cls(
             fixture=fixture,
             sport=sport,
@@ -50,6 +67,8 @@ class MatchSelection(BaseModel):
             commence_time=commence,
             is_2up_eligible=is_2up,
             early_payout_rule=early_payout,
+            why_picked_club=why_club,
+            why_best_option=why_option,
         )
 
 
@@ -66,8 +85,13 @@ class AIPrediction(BaseModel):
     booking_url: Optional[str] = None
 
     @classmethod
-    def from_dict_flexible(cls, data: dict, current_balance: float = 500.0) -> "AIPrediction":
-        """Robust parser handling LLM deviations and scoring ranges."""
+    def from_dict_flexible(
+        cls,
+        data: dict,
+        current_balance: float = 500.0,
+        require_nba_totals: bool = False,
+    ) -> "AIPrediction":
+        """Robust parser handling LLM deviations, strict 2-leg enforcement, max 1.60 odds, and optional NBA Over/Under market checks."""
         raw_selections = data.get("selections", [])
         parsed_selections = [
             MatchSelection.from_dict_flexible(s if isinstance(s, dict) else {})
@@ -101,10 +125,12 @@ class AIPrediction(BaseModel):
         title = data.get("title", "AI Recommended Pick")
         action = data.get("recommended_action", "BET")
 
-        # Hard Programmatic Odds Boundary Enforcement:
-        # 1. Individual leg odds: strictly between 1.200 and 1.590
-        # 2. Combined ticket odds: strictly between 1.500 and 1.800
-        if action == "BET" and parsed_selections:
+        # Hard Programmatic Odds & Ticket Boundary Enforcement:
+        # 1. Ticket structure: strictly EXACTLY 2 legs
+        # 2. Individual leg odds: strictly between 1.200 and 1.600 (non of each odds per match should exceed 1.60)
+        # 3. Combined ticket odds: strictly between 1.500 and 1.800
+        # 4. Optional NBA Totals check: strictly Over/Under (incl. Overtime) or First Half Over/Under
+        if action == "BET":
             for s in parsed_selections:
                 if s.odds < 1.20:
                     action = "SKIP"
@@ -112,12 +138,59 @@ class AIPrediction(BaseModel):
                     factors.append(f"Odds Filter Guard: Individual selection odds ({s.odds:.2f}) is below the strict 1.200 minimum.")
                     conf = 0
                     break
-                elif s.odds > 1.59:
+                elif s.odds > 1.60:
                     action = "SKIP"
-                    title = f"SKIP — Selection '{s.selection}' ({s.odds:.2f}) exceeds 1.590 individual maximum threshold"
-                    factors.append(f"Odds Filter Guard: Individual selection odds ({s.odds:.2f}) exceeds the strict 1.590 leg maximum.")
+                    title = f"SKIP — Selection '{s.selection}' ({s.odds:.2f}) exceeds 1.600 individual maximum threshold"
+                    factors.append(f"Odds Filter Guard: Individual selection odds ({s.odds:.2f}) exceeds the strict 1.600 leg maximum.")
                     conf = 0
                     break
+
+            if action == "BET" and len(parsed_selections) not in (1, 2):
+                action = "SKIP"
+                title = f"SKIP — Ticket has {len(parsed_selections)} leg(s); strictly 1 or 2 legs allowed"
+                factors.append(f"Ticket Structure Guard: Strictly 1 or 2 legs allowed, found {len(parsed_selections)}.")
+                conf = 0
+
+            # If 1-leg solo ticket, verify odds are between 1.500 and 1.600 to satisfy compound target safely
+            if action == "BET" and len(parsed_selections) == 1:
+                solo_leg = parsed_selections[0]
+                if solo_leg.odds < 1.50:
+                    action = "SKIP"
+                    title = f"SKIP — 1-leg solo pick has {solo_leg.odds:.2f} odds; minimum 1.500 required for single-leg tickets"
+                    factors.append(f"Solo Leg Guard: Single-leg ticket odds ({solo_leg.odds:.2f}) must be at least 1.500 to meet the daily compound target.")
+                    conf = 0
+
+            if action == "BET" and require_nba_totals:
+                import re
+                forbidden_mkts = [
+                    "winner", "moneyline", "spread", "handicap", "1x2", "double chance",
+                    "dnb", "draw no bet", "both teams to score", "btts", "goal", "corner", "card"
+                ]
+                for s in parsed_selections:
+                    # Enforce basketball
+                    s_sport = (s.sport or "").lower()
+                    if any(fb in s_sport for fb in ["foot", "socc"]):
+                        action = "SKIP"
+                        title = "SKIP — Sport must be strictly NBA Basketball"
+                        factors.append(f"Sport Guard: Football/soccer selection '{s.fixture}' rejected. NBA only.")
+                        conf = 0
+                        break
+
+                    mkt_lower = (s.market or "").lower()
+                    sel_lower = (s.selection or "").lower()
+                    text = f"{mkt_lower} {sel_lower}"
+                    if any(f in mkt_lower for f in forbidden_mkts):
+                        action = "SKIP"
+                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime) or First Half Over/Under required"
+                        factors.append(f"Market Guard: Prohibited market '{s.market}'. Only Over/Under (incl. Overtime) and First Half Over/Under are permitted.")
+                        conf = 0
+                        break
+                    if not any(k in text for k in ["over", "under", "total", "o/u"]):
+                        action = "SKIP"
+                        title = f"SKIP — Market '{s.market}' not allowed; strictly Over/Under (incl. Overtime) or First Half Over/Under required"
+                        factors.append("Market Guard: Only Over/Under (incl. Overtime) and First Half Over/Under are permitted.")
+                        conf = 0
+                        break
 
             if action == "BET":
                 if combined_odds < 1.50:

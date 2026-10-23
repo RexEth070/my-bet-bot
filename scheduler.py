@@ -73,12 +73,12 @@ def setup_scheduler(
                 potential_return=round(prediction.suggested_stake * prediction.combined_odds, 2),
                 booking_code=prediction.booking_code,
                 booking_url=prediction.booking_url,
-                outcome="PENDING",
+                outcome="PROPOSED",
             )
             bet_id = ledger.record_bet(user_id=user_id, bet=bet)
 
             pick_msg = messages.format_daily_pick_message(prediction, state)
-            primary_sport = prediction.selections[0].sport if prediction.selections else "football"
+            primary_sport = prediction.selections[0].sport if prediction.selections else "basketball"
             await app.bot.send_message(
                 chat_id=user_id,
                 text=pick_msg,

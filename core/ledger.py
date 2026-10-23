@@ -89,6 +89,10 @@ class LedgerDB:
                 cursor.execute("ALTER TABLE bets ADD COLUMN booking_url TEXT")
             except sqlite3.OperationalError:
                 pass
+            try:
+                cursor.execute("ALTER TABLE user_profiles ADD COLUMN preferred_sport TEXT DEFAULT 'basketball'")
+            except sqlite3.OperationalError:
+                pass
 
             conn.commit()
 
@@ -196,7 +200,7 @@ class LedgerDB:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # Update latest pending bet if bet_id not given
+            # Update latest placed/pending bet if bet_id not given
             if bet_id:
                 cursor.execute("""
                     UPDATE bets SET outcome = ?, profit_loss = ?
@@ -206,7 +210,7 @@ class LedgerDB:
                 cursor.execute("""
                     UPDATE bets SET outcome = ?, profit_loss = ?
                     WHERE id = (
-                        SELECT id FROM bets WHERE user_id = ? AND outcome = 'PENDING'
+                        SELECT id FROM bets WHERE user_id = ? AND outcome IN ('PLACED', 'PENDING')
                         ORDER BY id DESC LIMIT 1
                     )
                 """, ("WON" if won else "LOST", transition["profit_loss"], user_id))
@@ -260,12 +264,69 @@ class LedgerDB:
         transition["streak"] = new_streak
         return transition
 
-    def get_recent_bets(self, user_id: int, limit: int = 5) -> List[BetRecord]:
-        """Fetches the latest bets for the user."""
+    def confirm_bet_placed(self, user_id: int, bet_id: int) -> Optional[BetRecord]:
+        """Marks a proposed bet as PLACED (active tracking) and clears any other PROPOSED bets."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # Clear other unplaced PROPOSED bets for this user to avoid stale picks
+            cursor.execute("""
+                UPDATE bets SET outcome = 'CLEARED'
+                WHERE user_id = ? AND outcome = 'PROPOSED' AND id != ?
+            """, (user_id, bet_id))
+
+            # Mark this specific bet as PLACED
+            cursor.execute("""
+                UPDATE bets SET outcome = 'PLACED'
+                WHERE id = ? AND user_id = ?
+            """, (bet_id, user_id))
+            conn.commit()
+
+        return self.get_bet_by_id(bet_id, user_id)
+
+    def clear_bet(self, user_id: int, bet_id: int) -> bool:
+        """Clears/discards a proposed prediction from memory so it will not be tracked or graded."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT * FROM bets WHERE user_id = ?
+                UPDATE bets SET outcome = 'CLEARED'
+                WHERE id = ? AND user_id = ?
+            """, (bet_id, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_bet_by_id(self, bet_id: int, user_id: Optional[int] = None) -> Optional[BetRecord]:
+        """Fetches a single BetRecord by id."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if user_id:
+                cursor.execute("SELECT * FROM bets WHERE id = ? AND user_id = ?", (bet_id, user_id))
+            else:
+                cursor.execute("SELECT * FROM bets WHERE id = ?", (bet_id,))
+            r = cursor.fetchone()
+            if not r:
+                return None
+            return BetRecord(
+                id=r["id"],
+                day_number=r["day_number"],
+                event_name=r["event_name"],
+                market=r["market"],
+                selection=r["selection"],
+                odds=r["odds"],
+                stake=r["stake"],
+                potential_return=r["potential_return"],
+                outcome=r["outcome"],
+                profit_loss=r["profit_loss"],
+                booking_code=r["booking_code"] if "booking_code" in r.keys() else None,
+                booking_url=r["booking_url"] if "booking_url" in r.keys() else None,
+                created_at=r["created_at"],
+            )
+
+    def get_recent_bets(self, user_id: int, limit: int = 5) -> List[BetRecord]:
+        """Fetches the latest active and settled bets for the user (ignoring CLEARED)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM bets WHERE user_id = ? AND outcome != 'CLEARED'
                 ORDER BY id DESC LIMIT ?
             """, (user_id, limit))
             rows = cursor.fetchall()
@@ -290,17 +351,17 @@ class LedgerDB:
             ]
 
     def get_pending_bets(self, user_id: Optional[int] = None) -> List[Tuple[int, BetRecord]]:
-        """Retrieves all bets currently with outcome='PENDING' as (user_id, BetRecord) tuples."""
+        """Retrieves all placed/pending bets awaiting settlement as (user_id, BetRecord) tuples."""
         with self._get_connection() as conn:
             cursor = conn.cursor()
             if user_id:
                 cursor.execute("""
-                    SELECT * FROM bets WHERE user_id = ? AND outcome = 'PENDING'
+                    SELECT * FROM bets WHERE user_id = ? AND outcome IN ('PLACED', 'PENDING')
                     ORDER BY id ASC
                 """, (user_id,))
             else:
                 cursor.execute("""
-                    SELECT * FROM bets WHERE outcome = 'PENDING'
+                    SELECT * FROM bets WHERE outcome IN ('PLACED', 'PENDING')
                     ORDER BY id ASC
                 """)
             rows = cursor.fetchall()
@@ -327,6 +388,101 @@ class LedgerDB:
                 for r in rows
             ]
 
+    def get_proposed_bet(self, user_id: int) -> Optional[BetRecord]:
+        """Fetches the latest active PROPOSED bet for a user."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM bets WHERE user_id = ? AND outcome = 'PROPOSED'
+                ORDER BY id DESC LIMIT 1
+            """, (user_id,))
+            r = cursor.fetchone()
+            if not r:
+                return None
+            return BetRecord(
+                id=r["id"],
+                day_number=r["day_number"],
+                event_name=r["event_name"],
+                market=r["market"],
+                selection=r["selection"],
+                odds=r["odds"],
+                stake=r["stake"],
+                potential_return=r["potential_return"],
+                outcome=r["outcome"],
+                profit_loss=r["profit_loss"],
+                booking_code=r["booking_code"] if "booking_code" in r.keys() else None,
+                booking_url=r["booking_url"] if "booking_url" in r.keys() else None,
+                created_at=r["created_at"],
+            )
+
+    def get_user_sport_preference(self, user_id: int) -> str:
+        """Retrieves user's preferred betting sport (default: basketball)."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT preferred_sport FROM user_profiles WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row["preferred_sport"]:
+                return str(row["preferred_sport"]).lower()
+            return "basketball"
+
+    def set_user_sport_preference(self, user_id: int, sport: str):
+        """Saves user's preferred betting sport."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE user_profiles SET preferred_sport = ?, updated_at = ? WHERE user_id = ?",
+                (sport.lower(), get_current_time_iso(), user_id)
+            )
+            conn.commit()
+
+    def get_user_performance_stats(self, user_id: int) -> Dict[str, Any]:
+        """Calculates win rate %, total profit, ROI, and streak statistics."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT current_day, current_balance, initial_stake, total_withdrawn,
+                       total_won_bets, total_lost_bets, current_streak, highest_streak,
+                       preferred_sport
+                FROM user_profiles WHERE user_id = ?
+            """, (user_id,))
+            user_row = cursor.fetchone()
+            if not user_row:
+                return {}
+
+            total_won = user_row["total_won_bets"] or 0
+            total_lost = user_row["total_lost_bets"] or 0
+            total_settled = total_won + total_lost
+            win_rate = (total_won / total_settled * 100) if total_settled > 0 else 0.0
+
+            cursor.execute("""
+                SELECT COUNT(*) as total_bets,
+                       COALESCE(SUM(profit_loss), 0.0) as net_profit,
+                       COALESCE(AVG(odds), 0.0) as avg_odds
+                FROM bets WHERE user_id = ? AND outcome IN ('WON', 'LOST')
+            """, (user_id,))
+            bet_row = cursor.fetchone()
+
+            net_profit = bet_row["net_profit"] if bet_row else 0.0
+            initial = user_row["initial_stake"] or 500.0
+            roi = (net_profit / initial * 100) if initial > 0 else 0.0
+
+            return {
+                "current_day": user_row["current_day"],
+                "current_balance": user_row["current_balance"],
+                "initial_stake": initial,
+                "total_withdrawn": user_row["total_withdrawn"],
+                "total_won": total_won,
+                "total_lost": total_lost,
+                "total_settled": total_settled,
+                "win_rate": round(win_rate, 1),
+                "current_streak": user_row["current_streak"],
+                "highest_streak": user_row["highest_streak"],
+                "net_profit": round(net_profit, 2),
+                "roi": round(roi, 1),
+                "avg_odds": round(bet_row["avg_odds"], 2) if (bet_row and bet_row["avg_odds"]) else 1.55,
+                "preferred_sport": user_row["preferred_sport"] or "basketball",
+            }
+
     def reset_challenge(self, user_id: int, initial_stake: Optional[float] = None):
         """Resets the challenge to Day 1."""
         if initial_stake is None:
@@ -348,6 +504,34 @@ class LedgerDB:
                 WHERE user_id = ?
             """, (initial_stake, initial_stake, now, user_id))
             conn.commit()
+
+    def clear_all_user_memories(self, user_id: int, initial_stake: Optional[float] = None):
+        """Wipes all previous bets, withdrawals, and resets ledger state to Day 1 with clean history."""
+        if initial_stake is None:
+            initial_stake = config.DEFAULT_INITIAL_STAKE
+        now = get_current_time_iso()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bets WHERE user_id = ?", (user_id,))
+            cursor.execute("DELETE FROM withdrawals WHERE user_id = ?", (user_id,))
+            cursor.execute("""
+                UPDATE user_profiles
+                SET current_day = 1,
+                    current_balance = ?,
+                    initial_stake = ?,
+                    total_withdrawn = 0.0,
+                    total_won_bets = 0,
+                    total_lost_bets = 0,
+                    current_streak = 0,
+                    highest_streak = 0,
+                    preferred_sport = 'basketball',
+                    status = 'ACTIVE',
+                    updated_at = ?
+                WHERE user_id = ?
+            """, (initial_stake, initial_stake, now, user_id))
+            conn.commit()
+            return True
+
 
 
 # Alias for backwards/cross-module compatibility

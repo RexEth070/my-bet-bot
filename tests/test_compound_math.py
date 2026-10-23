@@ -157,7 +157,7 @@ class TestCompoundMathAndLedger(unittest.TestCase):
         self.assertEqual(pred_low.recommended_action, "SKIP")
         self.assertIn("below 1.200", pred_low.title)
 
-        # Test 3: Leg above 1.590 (e.g. 1.65) -> Must SKIP
+        # Test 3: Leg above 1.600 (e.g. 1.65) -> Must SKIP
         high_leg_data = {
             "title": "Inter Milan Win",
             "selections": [
@@ -168,7 +168,7 @@ class TestCompoundMathAndLedger(unittest.TestCase):
         }
         pred_high = AIPrediction.from_dict_flexible(high_leg_data, current_balance=500.0)
         self.assertEqual(pred_high.recommended_action, "SKIP")
-        self.assertIn("exceeds 1.590", pred_high.title)
+        self.assertIn("exceeds 1.600", pred_high.title)
 
         # Test 4: Combined odds below 1.500 (e.g. 1.45) -> Must SKIP
         low_combined_data = {

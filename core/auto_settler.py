@@ -26,7 +26,6 @@ _ESPN_SCORES_CACHE_TS: float = 0.0
 
 
 class AutoSettler:
-    ESPN_SOCCER_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard"
     ESPN_NBA_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
 
     def __init__(self, ledger: Optional[SQLiteLedger] = None, sporty: Optional[SportyBetService] = None):
@@ -34,14 +33,14 @@ class AutoSettler:
         self.sporty = sporty or SportyBetService()
 
     def fetch_espn_scores(self) -> Dict[str, Dict[str, Any]]:
-        """Pulls global live and concluded soccer and NBA scoreboards from ESPN public API (cached for 120s)."""
+        """Pulls live and concluded NBA scoreboards from ESPN public API (cached for 120s)."""
         global _ESPN_SCORES_CACHE, _ESPN_SCORES_CACHE_TS
         now_ts = time.time()
         if _ESPN_SCORES_CACHE and (now_ts - _ESPN_SCORES_CACHE_TS < 120.0):
             return _ESPN_SCORES_CACHE
 
         scores_by_fixture: Dict[str, Dict[str, Any]] = {}
-        for url in [self.ESPN_SOCCER_URL, self.ESPN_NBA_URL]:
+        for url in [self.ESPN_NBA_URL]:
             try:
                 r = httpx.get(url, timeout=3.5)
                 if r.status_code == 200:
@@ -71,12 +70,29 @@ class AutoSettler:
                         except (ValueError, TypeError):
                             home_score, away_score = 0, 0
 
+                        home_lines = home_c.get("linescores", [])
+                        away_lines = away_c.get("linescores", [])
+                        home_ht = None
+                        away_ht = None
+                        if len(home_lines) >= 2 and len(away_lines) >= 2:
+                            try:
+                                home_ht = int(float(home_lines[0].get("value", 0)) + float(home_lines[1].get("value", 0)))
+                                away_ht = int(float(away_lines[0].get("value", 0)) + float(away_lines[1].get("value", 0)))
+                            except (ValueError, TypeError):
+                                pass
+
+                        period = int(ev.get("status", {}).get("period") or 0)
+                        ht_completed = (period >= 3 or is_completed)
+
                         key = f"{home_name.lower()} vs {away_name.lower()}"
                         scores_by_fixture[key] = {
                             "home_name": home_name,
                             "away_name": away_name,
                             "home_score": home_score,
                             "away_score": away_score,
+                            "home_ht_score": home_ht,
+                            "away_ht_score": away_ht,
+                            "ht_completed": ht_completed,
                             "is_completed": is_completed,
                             "status": status_desc,
                         }
@@ -119,6 +135,9 @@ class AutoSettler:
                 return {
                     "home_score": data.get("home_score", 0),
                     "away_score": data.get("away_score", 0),
+                    "home_ht_score": data.get("home_ht_score"),
+                    "away_ht_score": data.get("away_ht_score"),
+                    "ht_completed": data.get("ht_completed", False),
                     "is_completed": data.get("is_completed", data.get("completed", False)),
                     "status": data.get("status", "Unknown"),
                     "source": "ESPN",
@@ -180,16 +199,39 @@ class AutoSettler:
             return (away_score > line) if ("over" in s_desc or "over" in m_desc) else (away_score < line)
 
         # 5. Over/Under Total Goals or Points (General match totals)
-        if "over" in m_desc or "under" in m_desc or "over" in s_desc or "under" in s_desc or "total" in m_desc:
+        is_ou = bool(re.search(r"\b(over|under)\b", f"{m_desc} {s_desc}")) or ("total" in m_desc and "winner" not in m_desc)
+        if is_ou and "handicap" not in m_desc and "spread" not in m_desc:
             line_match = re.search(r"(\d+\.?\d*)", f"{m_desc} {s_desc}")
             if line_match:
                 line = float(line_match.group(1))
-                if "over" in s_desc or "over" in m_desc:
+                if bool(re.search(r"\bover\b", f"{m_desc} {s_desc}")):
                     return (total_score > line)
-                elif "under" in s_desc or "under" in m_desc:
+                elif bool(re.search(r"\bunder\b", f"{m_desc} {s_desc}")):
                     return (total_score < line)
 
-        # 6. Basketball Winner (incl. overtime)
+        # 6. Basketball Point Spread / Handicap (e.g. "Boston Celtics +8.5", "Spread +6.5", "-4.5", "Handicap")
+        if "spread" in m_desc or "handicap" in m_desc or "hcp" in m_desc or ("point" in m_desc and ("+" in s_desc or "-" in s_desc)):
+            spread_match = re.search(r"([+-]?\d+(?:\.\d+)?)", s_desc)
+            if not spread_match:
+                spread_match = re.search(r"([+-]?\d+(?:\.\d+)?)", m_desc)
+            if spread_match:
+                spread_val = float(spread_match.group(1))
+                is_home = (
+                    "home" in s_desc
+                    or "1" in s_desc.split()
+                    or (home_team and any(t in s_desc for t in home_team.lower().split() if len(t) > 2))
+                )
+                is_away = (
+                    "away" in s_desc
+                    or "2" in s_desc.split()
+                    or (away_team and any(t in s_desc for t in away_team.lower().split() if len(t) > 2))
+                )
+                if is_away and not is_home:
+                    return (away_score + spread_val) > home_score
+                else:
+                    return (home_score + spread_val) > away_score
+
+        # 7. Basketball Winner (incl. overtime)
         if "winner" in m_desc or "moneyline" in m_desc:
             if home_team and home_team.lower() in s_desc:
                 return (home_score > away_score)
@@ -203,7 +245,7 @@ class AutoSettler:
                 # Default assume pick is favorite/home if specified team won
                 return (home_score > away_score)
 
-        # 7. Standard 1X2 / 2-Up
+        # 8. Standard 1X2 / 2-Up
         if "1x2" in m_desc or "2-up" in m_desc or "2up" in m_desc or "match winner" in m_desc:
             if "draw" in s_desc or s_desc == "x":
                 return (home_score == away_score)
@@ -213,6 +255,40 @@ class AutoSettler:
                 return (home_score > away_score)
 
         return None
+
+    @staticmethod
+    def check_early_payout_lead(
+        market: str,
+        selection: str,
+        home_score: int,
+        away_score: int,
+        home_team: str = "",
+        away_team: str = "",
+    ) -> bool:
+        """Checks if an in-progress game has triggered SportyBet 15-Up (Basketball) or 2-Up (Soccer)."""
+        m_desc = market.lower()
+        s_desc = selection.lower()
+        h_lower = home_team.lower()
+        a_lower = away_team.lower()
+
+        # In basketball, a 15+ point lead at any point triggers early payout
+        is_basketball = any(k in m_desc for k in ["overtime", "spread", "15-up", "point", "winner"]) or ("goal" not in m_desc and "btts" not in m_desc and "1x2" not in m_desc)
+        threshold = 15 if is_basketball else 2
+
+        is_home_pick = (
+            "home" in s_desc or s_desc.startswith("1")
+            or (h_lower and any(tok in s_desc for tok in h_lower.split() if len(tok) > 2))
+        )
+        is_away_pick = (
+            "away" in s_desc or s_desc.startswith("2")
+            or (a_lower and any(tok in s_desc for tok in a_lower.split() if len(tok) > 2))
+        )
+
+        if is_home_pick and (home_score - away_score) >= threshold:
+            return True
+        if is_away_pick and (away_score - home_score) >= threshold:
+            return True
+        return False
 
     def check_and_settle_all(self, bot_app=None) -> List[Dict[str, Any]]:
         """Scans all PENDING bets in ledger, auto-grades concluded matches, and dispatches alerts."""
@@ -240,7 +316,7 @@ class AutoSettler:
         espn_cache: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Evaluates a single BetRecord. If all fixtures completed, records WON/LOST in ledger."""
-        if bet.outcome != "PENDING":
+        if bet.outcome not in ("PLACED", "PENDING"):
             return None
 
         # Decompose multi-leg fixtures and markets
@@ -287,16 +363,53 @@ class AutoSettler:
                 all_completed = False
                 break
 
-            if not match_data["is_completed"]:
-                all_completed = False
-                break
-
             h_score = match_data["home_score"]
             a_score = match_data["away_score"]
-            score_str = f"{h_name} {h_score} - {a_score} {a_name}"
+
+            is_1st_half = any(k in mkt.lower() or k in sel.lower() for k in ["1st half", "first half", "ht"])
+
+            if not match_data["is_completed"]:
+                # 1. 1st Half Over/Under evaluation at halftime
+                if is_1st_half and match_data.get("ht_completed") and match_data.get("home_ht_score") is not None:
+                    h_ht = match_data["home_ht_score"]
+                    a_ht = match_data["away_ht_score"]
+                    leg_won = self.evaluate_leg(mkt, sel, h_ht, a_ht, home_team=h_name, away_team=a_name)
+                    if leg_won is not None:
+                        score_str = f"{h_name} {h_ht} - {a_ht} {a_name} (1st Half Final)"
+                        leg_scores.append(score_str)
+                        leg_results.append(leg_won)
+                        continue
+
+                # 2. Over Points Cleared Early (points only accumulate, so Over bet cannot lose once line exceeded)
+                is_over = bool(re.search(r"\bover\b", f"{mkt} {sel}", re.I))
+                line_match = re.search(r"(\d+\.?\d*)", f"{mkt} {sel}")
+                if is_over and line_match and not is_1st_half and (h_score + a_score) > float(line_match.group(1)):
+                    score_str = f"{h_name} {h_score} - {a_score} {a_name} (⚡ Over Points Cleared Early)"
+                    leg_scores.append(score_str)
+                    leg_results.append(True)
+                    continue
+
+                # 3. Check for Early Payout trigger while game is in progress (15-Up in Basketball, 2-Up in Soccer)
+                if self.check_early_payout_lead(mkt, sel, h_score, a_score, home_team=h_name, away_team=a_name):
+                    score_str = f"{h_name} {h_score} - {a_score} {a_name} (⚡ 15-Up Early Lead Payout)"
+                    leg_scores.append(score_str)
+                    leg_results.append(True)
+                    continue
+                else:
+                    all_completed = False
+                    break
+
+            if is_1st_half and match_data.get("home_ht_score") is not None:
+                h_eval = match_data["home_ht_score"]
+                a_eval = match_data["away_ht_score"]
+                score_str = f"{h_name} {h_eval} - {a_eval} {a_name} (1st Half)"
+            else:
+                h_eval = h_score
+                a_eval = a_score
+                score_str = f"{h_name} {h_score} - {a_score} {a_name}"
             leg_scores.append(score_str)
 
-            leg_won = self.evaluate_leg(mkt, sel, h_score, a_score, home_team=h_name, away_team=a_name)
+            leg_won = self.evaluate_leg(mkt, sel, h_eval, a_eval, home_team=h_name, away_team=a_name)
             if leg_won is None:
                 # Unable to safely determine outcome
                 all_completed = False
@@ -342,6 +455,10 @@ class AutoSettler:
         trans = result["transition"]
         scores_text = "\n".join([f"   • {s}" for s in result["leg_scores"]])
 
+        code_line = f"🎟 *Booking Code:* `{bet.booking_code}`\n" if getattr(bet, "booking_code", None) else ""
+        is_soccer = any(k in f"{bet.event_name} {bet.market}".lower() for k in ["goal", "btts", "1x2", "double chance", "dnb", "draw no bet"])
+        sport_emoji = "⚽" if is_soccer else "🏀"
+
         if won:
             profit = round(bet.potential_return - bet.stake, 2)
             withdrawal_text = ""
@@ -353,26 +470,32 @@ class AutoSettler:
                 )
 
             msg = (
-                f"🎉 *AUTO-SETTLEMENT: DAY {bet.day_number} BET WON!* 🏆\n\n"
-                f"⚽ *Match:* `{bet.event_name}`\n"
+                f"🎉 *CONGRATULATIONS! BET WON!* 🏆\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Your Day {bet.day_number} placed bet has officially WON!\n\n"
+                f"{code_line}"
+                f"{sport_emoji} *Match:* `{bet.event_name}`\n"
                 f"🎯 *Pick:* `{bet.selection}` @ `{bet.odds:.2f}`\n\n"
                 f"📊 *Final Match Scores:*\n{scores_text}\n\n"
                 f"💵 *Stake:* `{bet.stake:,.2f} {config.DEFAULT_CURRENCY}`\n"
                 f"💰 *Payout Credited:* `+{bet.potential_return:,.2f} {config.DEFAULT_CURRENCY}` (+{profit:,.2f} Profit)\n"
                 f"📈 *New Bankroll:* *{trans['new_balance']:,.2f} {config.DEFAULT_CURRENCY}*\n"
-                f"🔥 *Win Streak:* *{trans.get('streak', 1)} in a row!*\n"
+                f"🔥 *Winning Streak:* *{trans.get('streak', 1)} in a row!*\n"
                 f"{withdrawal_text}\n"
-                f"🎯 Next Pick: Type `/today` or tap the button to prepare your Day {trans['next_day']} pick!"
+                f"🎯 Tap *🎯 Today's Pick* or type `/today` to prepare your Day {trans['next_day']} pick!"
             )
         else:
             msg = (
-                f"⚠️ *AUTO-SETTLEMENT: DAY {bet.day_number} BET RESULT*\n\n"
-                f"⚽ *Match:* `{bet.event_name}`\n"
+                f"💔 *BET LOST — Match Concluded*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"Your Day {bet.day_number} placed bet did not land.\n\n"
+                f"{code_line}"
+                f"{sport_emoji} *Match:* `{bet.event_name}`\n"
                 f"❌ *Pick Missed:* `{bet.selection}`\n\n"
                 f"📊 *Final Match Scores:*\n{scores_text}\n\n"
-                f"🛡️ *Capital Reset:* Bankroll reset to initial stake ({config.DEFAULT_INITIAL_STAKE:,.2f} {config.DEFAULT_CURRENCY}).\n"
+                f"🛡️ *Capital Preservation Reset:* Bankroll reset to initial stake ({config.DEFAULT_INITIAL_STAKE:,.2f} {config.DEFAULT_CURRENCY}).\n"
                 f"🧠 Forensic postmortem has been logged to prevent similar loss vectors.\n\n"
-                f"Type `/today` to analyze the next high-probability setup."
+                f"Tap *🎯 Today's Pick* or type `/today` when you're ready for the next setup."
             )
 
         try:
