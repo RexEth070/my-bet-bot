@@ -99,7 +99,7 @@ _{prediction.title}_
         if why_opt:
             selections_text += f"   • 🎯 *Why best bet option:* {why_opt}\n"
         if s.early_payout_rule in ("15-Up", "2-Up", "1-Up") or s.is_2up_eligible:
-            selections_text += "   • ⚡ *SportyBet 15-Up Early Payout: ELIGIBLE* (Paid as full WIN if 15 pts ahead at any stage!)\n"
+            selections_text += "   • ⚡ *SportyBet Flash Win / 15-Up Early Payout: ELIGIBLE* (Instant Full WIN Payout if 15+ pts ahead at any stage!)\n"
 
     factors_text = "\n".join([f"• {f}" for f in prediction.key_factors])
 

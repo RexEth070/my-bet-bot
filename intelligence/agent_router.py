@@ -186,12 +186,12 @@ class AgentRouterClient:
                 mkt_lower = clean_mkt.lower()
                 sel_lower = clean_sel.lower()
                 is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
-                is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
+                is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win", "flash win", "15up", "15-up", "2up", "early payout"])
                 is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
 
                 if not (is_ou_market or is_win_market) or is_forbidden:
                     continue
-                if odds_val < 1.20 or odds_val > 1.60:
+                if odds_val < 1.15 or odds_val > 1.60:
                     continue
 
                 team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
@@ -213,10 +213,14 @@ class AgentRouterClient:
                     win_p = 95.0
 
                 three_verdict = edge_res.get("three_way_verdict")
+                clean_mkt_named = clean_mkt
+                if is_win_market and not any(k in clean_mkt.lower() for k in ["15-up", "flash", "early"]):
+                    clean_mkt_named = "Winner (incl. Overtime) [⚡ Flash Win / 15-Up Early Payout]"
+
                 if three_verdict:
                     why_opt = f"3-Way Audit Verdict: {three_verdict}"
                 elif is_win_market:
-                    why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
+                    why_opt = "Winner (incl. Overtime) with ⚡ SportyBet Flash Win / 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks or overtime reversals."
                 elif is_1st_half:
                     why_opt = f"1st Half {'Under' if 'under' in sel_lower else 'Over'} provides early security cashing at halftime without 4th-quarter blowout volatility."
                 else:
@@ -225,7 +229,7 @@ class AgentRouterClient:
                 m_sel = MatchSelection(
                     fixture=clean_fix,
                     sport="basketball",
-                    market=clean_mkt,
+                    market=clean_mkt_named,
                     selection=clean_sel,
                     odds=odds_val,
                     commence_time="Today",
@@ -239,7 +243,7 @@ class AgentRouterClient:
 
                 parsed_candidates.append({
                     "fixture": clean_fix,
-                    "market": clean_mkt,
+                    "market": clean_mkt_named,
                     "selection": clean_sel,
                     "odds": odds_val,
                     "cushion": cushion,
@@ -259,10 +263,10 @@ class AgentRouterClient:
         solo_candidates.sort(key=lambda x: (x["is_audit_winner"], x["win_p"], x["cushion"]), reverse=True)
         best_solo = [solo_candidates[0]["selection_obj"]] if solo_candidates else None
 
-        # Track 2: Best 2-Leg Combination Candidate (distinct fixtures, combined odds 1.50 - 1.80)
-        combo_legs = [c for c in parsed_candidates if 1.20 <= c["odds"] <= 1.45 and c["cushion"] > 0]
+        # Track 2: Best 2-Leg Combination Candidate (distinct fixtures, combined odds strictly 1.50 - 1.80)
+        combo_legs = [c for c in parsed_candidates if 1.16 <= c["odds"] <= 1.50 and c["cushion"] > 0]
         if len(combo_legs) < 2:
-            combo_legs = [c for c in parsed_candidates if 1.20 <= c["odds"] <= 1.45]
+            combo_legs = [c for c in parsed_candidates if 1.16 <= c["odds"] <= 1.50]
         best_combo = None
         best_combo_score = -999.0
 
@@ -273,11 +277,13 @@ class AgentRouterClient:
                 if c1["fixture"] == c2["fixture"]:
                     continue
                 comb = round(c1["odds"] * c2["odds"], 2)
+                # Strictly clamp combined odds: never below 1.50, never above 1.80 (nor above 2.0)
                 if 1.50 <= comb <= 1.80:
-                    # Preference score incorporates win probabilities, cushions, audit-winner status, and market diversity
+                    # Preference score incorporates win probabilities, cushions, audit-winner status, Flash Win bonus, and market diversity
                     diversity_bonus = 2.0 if (c1["is_win_market"] != c2["is_win_market"]) else 0.0
                     audit_bonus = (3.0 if c1["is_audit_winner"] else 0.0) + (3.0 if c2["is_audit_winner"] else 0.0)
-                    score = (c1["win_p"] + c2["win_p"]) + (c1["cushion"] + c2["cushion"]) * 0.2 + diversity_bonus + audit_bonus
+                    flash_win_bonus = 4.0 if (c1["is_win_market"] or c2["is_win_market"]) else 0.0
+                    score = (c1["win_p"] + c2["win_p"]) + (c1["cushion"] + c2["cushion"]) * 0.2 + diversity_bonus + audit_bonus + flash_win_bonus
                     if score > best_combo_score:
                         best_combo_score = score
                         best_combo = [c1["selection_obj"], c2["selection_obj"]]
@@ -419,10 +425,17 @@ class AgentRouterClient:
             comb_odds = round(selections[0].odds * selections[1].odds, 2)
             ticket_title = f"Vetted High-Conviction 2-Leg Ticket ({selections[0].selection} + {selections[1].selection})"
 
-        if comb_odds < 1.50:
-            comb_odds = 1.55
-        elif comb_odds > 1.80:
-            comb_odds = 1.75
+        # Strictly enforce 2-leg combination odds boundaries (never below 1.50, never above 1.80):
+        if len(selections) == 2 and (comb_odds < 1.50 or comb_odds > 1.80):
+            logger.warning(f"Calculated 2-leg combined odds ({comb_odds}) outside 1.50 - 1.80 window. Calibrating with verified preset.")
+            for opt in filtered_presets:
+                if len(opt) == 2:
+                    p_comb = round(opt[0].odds * opt[1].odds, 2)
+                    if 1.50 <= p_comb <= 1.80:
+                        selections = opt
+                        comb_odds = p_comb
+                        ticket_title = f"Vetted High-Conviction 2-Leg Ticket ({selections[0].selection} + {selections[1].selection})"
+                        break
 
         return AIPrediction(
             title=ticket_title,

@@ -21,6 +21,39 @@ _SPORTY_EVENTS_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 _SPORTY_CACHE_TTL: float = 300.0  # 5 minutes cache
 
 
+def _extract_spec_line(text: str) -> Optional[str]:
+    """Robustly extracts total points/goals line from market/selection text,
+    strictly ignoring ordinals like '1st', '2nd', '3rd', '4th', '1h', '2h'."""
+    if not text:
+        return None
+    # 1. Explicit total= in description
+    m = re.search(r"total\s*=\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 2. Over/Under followed by number
+    m = re.search(r"(?:over|under|o/u)\s*(\d+(?:\.\d+)?)", text, re.IGNORECASE)
+    if m:
+        return m.group(1)
+
+    # 3. Floating point decimals (e.g. 114.5, 122.5, 218.5)
+    m = re.search(r"\b(\d+\.\d+)\b", text)
+    if m:
+        return m.group(1)
+
+    # 4. Clean out ordinals (1st, 2nd, 3rd, 4th, 1h, 2h) then look for numbers >= 15
+    clean = re.sub(r"\b(?:1st|2nd|3rd|4th|1h|2h)\b", " ", text, flags=re.IGNORECASE)
+    nums = re.findall(r"\b(\d+(?:\.\d+)?)\b", clean)
+    for n in nums:
+        try:
+            val = float(n)
+            if val >= 15.0:
+                return n
+        except ValueError:
+            pass
+    return None
+
+
 class SportyBetService:
     BASE_URL = "https://www.sportybet.com/api/ng"
     HEADERS = {
@@ -119,14 +152,14 @@ class SportyBetService:
 
         is_home = (
             "home" in target_s_desc
-            or target_s_desc.startswith("1")
-            or " 1" in target_s_desc
+            or target_s_desc == "1"
+            or target_s_desc.startswith("1 ")
             or any(w in target_s_desc for w in home_team.split() if len(w) > 3)
         )
         is_away = (
             "away" in target_s_desc
-            or target_s_desc.startswith("2")
-            or " 2" in target_s_desc
+            or target_s_desc == "2"
+            or target_s_desc.startswith("2 ")
             or any(w in target_s_desc for w in away_team.split() if len(w) > 3)
         )
         is_draw = "draw" in target_s_desc or " x" in f" {target_s_desc} " or target_s_desc.endswith("x") or target_s_desc.startswith("x")
@@ -211,33 +244,127 @@ class SportyBetService:
         # 8b. 1st Half Over/Under Total Points [Market 68]
         if any(k in target_m_desc for k in ["1st half", "first half", "ht"]) and any(k in target_m_desc or k in target_s_desc for k in ["over", "under", "total", "points"]):
             target_text = f"{target_m_desc} {target_s_desc}"
-            num_match = re.search(r"(\d+(?:\.\d+)?)", target_text)
-            spec_line = num_match.group(1) if num_match else None
-            m_ht_ou = None
-            if spec_line:
-                m_ht_ou = next((m for m in markets if str(m.get("id")) == "68" and m.get("specifier") == f"total={spec_line}"), None)
-            if not m_ht_ou:
-                m_ht_ou = next((m for m in markets if str(m.get("id")) == "68"), None)
-            if m_ht_ou:
-                outcome_id = "12" if bool(re.search(r"\bover\b", target_s_desc)) else "13"
-                return {"eventId": event_id, "marketId": "68", "outcomeId": outcome_id, "specifier": m_ht_ou.get("specifier")}
+            spec_line = _extract_spec_line(target_text)
+            is_over = bool(re.search(r"\bover\b", target_s_desc)) or ("over" in target_m_desc and "under" not in target_s_desc)
+            outcome_id = "12" if is_over else "13"
+
+            m68_markets = [m for m in markets if str(m.get("id")) == "68"]
+            if m68_markets:
+                m_ht_ou = None
+                if spec_line:
+                    m_ht_ou = next((m for m in m68_markets if m.get("specifier") == f"total={spec_line}"), None)
+
+                # Fallback to closest verified active line with safe odds (within 4.5 pts)
+                if not m_ht_ou and spec_line:
+                    try:
+                        target_val = float(spec_line)
+                        candidates = []
+                        for m in m68_markets:
+                            spec = m.get("specifier", "")
+                            m_line = _extract_spec_line(spec)
+                            if not m_line:
+                                continue
+                            line_val = float(m_line)
+                            out_item = next((o for o in m.get("outcomes", []) if str(o.get("id")) == outcome_id and o.get("isActive") is not False), None)
+                            if out_item:
+                                try:
+                                    out_odds = float(out_item.get("odds", 0))
+                                except (ValueError, TypeError):
+                                    out_odds = 0.0
+                                dist = abs(line_val - target_val)
+                                candidates.append((dist, abs(out_odds - 1.45), line_val, out_odds, m))
+                        if candidates:
+                            candidates.sort(key=lambda x: (x[0], x[1]))
+                            if candidates[0][0] <= 4.5 and 1.18 <= candidates[0][3] <= 1.70:
+                                m_ht_ou = candidates[0][4]
+                                logger.info(f"SportyBet Market 68: Target total={spec_line} not found. Selected closest verified active line: {m_ht_ou.get('specifier')} (dist={candidates[0][0]:.1f}, odds={candidates[0][3]})")
+                            else:
+                                logger.warning(f"SportyBet Market 68: Closest line is {candidates[0][2]} (dist={candidates[0][0]:.1f} pts, odds={candidates[0][3]}), outside safe bounds for target {spec_line}. Rejected to prevent loss of funds.")
+                    except Exception as e:
+                        logger.warning(f"Error finding nearest line in Market 68: {e}")
+
+                if not m_ht_ou and not spec_line:
+                    best_m = None
+                    best_diff = 999.0
+                    for m in m68_markets:
+                        out_item = next((o for o in m.get("outcomes", []) if str(o.get("id")) == outcome_id and o.get("isActive") is not False), None)
+                        if out_item:
+                            try:
+                                o_odds = float(out_item.get("odds", 0))
+                                if 1.20 <= o_odds <= 1.65:
+                                    diff = abs(o_odds - 1.45)
+                                    if diff < best_diff:
+                                        best_diff = diff
+                                        best_m = m
+                            except Exception:
+                                pass
+                    m_ht_ou = best_m
+
+                if m_ht_ou:
+                    return {"eventId": event_id, "marketId": "68", "outcomeId": outcome_id, "specifier": m_ht_ou.get("specifier")}
 
         # 9. Over/Under Total Goals or Points (incl. Overtime) [Market 18 / 222]
         is_ou = bool(re.search(r"\b(over|under)\b", target_m_desc)) or bool(re.search(r"\b(over|under)\b", target_s_desc)) or ("total" in target_m_desc and "winner" not in target_m_desc)
         if is_ou and "handicap" not in target_m_desc and "spread" not in target_m_desc:
             target_text = f"{target_m_desc} {target_s_desc}"
-            num_match = re.search(r"(\d+(?:\.\d+)?)", target_text)
-            spec_line = num_match.group(1) if num_match else None
+            spec_line = _extract_spec_line(target_text)
+            is_over = bool(re.search(r"\bover\b", target_s_desc)) or ("over" in target_m_desc and "under" not in target_s_desc)
+            outcome_id = "12" if is_over else "13"
 
-            m_ou = None
-            if spec_line:
-                m_ou = next((m for m in markets if str(m.get("id")) in ["18", "222"] and m.get("specifier") == f"total={spec_line}"), None)
-            if not m_ou:
-                m_ou = next((m for m in markets if str(m.get("id")) in ["18", "222"]), None)
+            m_ou_list = [m for m in markets if str(m.get("id")) in ["18", "222"]]
+            if m_ou_list:
+                m_ou = None
+                if spec_line:
+                    m_ou = next((m for m in m_ou_list if m.get("specifier") == f"total={spec_line}"), None)
 
-            if m_ou:
-                outcome_id = "12" if bool(re.search(r"\bover\b", target_s_desc)) else "13"
-                return {"eventId": event_id, "marketId": str(m_ou.get("id")), "outcomeId": outcome_id, "specifier": m_ou.get("specifier")}
+                # Fallback to closest verified active line with safe odds (within 6.0 pts)
+                if not m_ou and spec_line:
+                    try:
+                        target_val = float(spec_line)
+                        candidates = []
+                        for m in m_ou_list:
+                            spec = m.get("specifier", "")
+                            m_line = _extract_spec_line(spec)
+                            if not m_line:
+                                continue
+                            line_val = float(m_line)
+                            out_item = next((o for o in m.get("outcomes", []) if str(o.get("id")) == outcome_id and o.get("isActive") is not False), None)
+                            if out_item:
+                                try:
+                                    out_odds = float(out_item.get("odds", 0))
+                                except (ValueError, TypeError):
+                                    out_odds = 0.0
+                                dist = abs(line_val - target_val)
+                                candidates.append((dist, abs(out_odds - 1.45), line_val, out_odds, m))
+                        if candidates:
+                            candidates.sort(key=lambda x: (x[0], x[1]))
+                            if candidates[0][0] <= 6.0 and 1.18 <= candidates[0][3] <= 1.70:
+                                m_ou = candidates[0][4]
+                                logger.info(f"SportyBet Market {m_ou.get('id')}: Target total={spec_line} not found. Selected closest verified active line: {m_ou.get('specifier')} (dist={candidates[0][0]:.1f}, odds={candidates[0][3]})")
+                            else:
+                                logger.warning(f"SportyBet Market 18/222: Closest line is {candidates[0][2]} (dist={candidates[0][0]:.1f} pts, odds={candidates[0][3]}), outside safe bounds for target {spec_line}. Rejected to prevent loss of funds.")
+                    except Exception as e:
+                        logger.warning(f"Error finding nearest line in Market 18/222: {e}")
+
+                if not m_ou and not spec_line:
+                    best_m = None
+                    best_diff = 999.0
+                    for m in m_ou_list:
+                        out_item = next((o for o in m.get("outcomes", []) if str(o.get("id")) == outcome_id and o.get("isActive") is not False), None)
+                        if out_item:
+                            try:
+                                o_odds = float(out_item.get("odds", 0))
+                                if 1.20 <= o_odds <= 1.65:
+                                    diff = abs(o_odds - 1.45)
+                                    if diff < best_diff:
+                                        best_diff = diff
+                                        best_m = m
+                            except Exception:
+                                pass
+                    m_ou = best_m
+
+                if m_ou:
+                    return {"eventId": event_id, "marketId": str(m_ou.get("id")), "outcomeId": outcome_id, "specifier": m_ou.get("specifier")}
 
         # 10. Basketball Point Spread / Handicap [Market 220]
         if "spread" in target_m_desc or "handicap" in target_m_desc or "hcp" in target_m_desc or ("point" in target_m_desc and ("+" in target_s_desc or "-" in target_s_desc)):
@@ -246,10 +373,10 @@ class SportyBetService:
                 outcome_id = "4" if is_home else "5"
                 return {"eventId": event_id, "marketId": "220", "outcomeId": outcome_id, "specifier": m_spread.get("specifier")}
 
-        # 11. Basketball Winner (incl. overtime) [Market 219]
+        # 11. Basketball Winner (incl. overtime) [Market 219] - Flash Win / 15-Up Early Payout
         m_win = next((m for m in markets if str(m.get("id")) == "219"), None)
         if m_win and (
-            any(k in target_m_desc for k in ["winner", "moneyline", "ml", "to win", "overtime", "incl. ot", "match"])
+            any(k in target_m_desc for k in ["winner", "moneyline", "ml", "to win", "overtime", "incl. ot", "match", "flash win", "15up", "15-up", "2up", "early payout"])
             and not any(k in target_m_desc for k in ["double", "dc", "draw", "btts", "gg", "total", "goal", "spread", "handicap"])
         ):
             outcome_id = "4" if is_home else "5"
@@ -257,7 +384,10 @@ class SportyBetService:
 
         # 12. Standard 1X2 Match Winner [Market 1]
         m_1x2 = next((m for m in markets if str(m.get("id")) == "1"), None)
-        if m_1x2:
+        if m_1x2 and (
+            any(k in target_m_desc for k in ["1x2", "match result", "full time result", "ft 1x2"])
+            or (("win" in target_m_desc or "winner" in target_m_desc) and "overtime" not in target_m_desc and not any(k in target_m_desc for k in ["total", "point", "over", "under", "half"]))
+        ):
             if is_draw and not (is_home or is_away):
                 outcome_id = "2"
             elif is_away and not is_home:
