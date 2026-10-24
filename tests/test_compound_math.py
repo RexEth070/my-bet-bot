@@ -184,9 +184,23 @@ class TestCompoundMathAndLedger(unittest.TestCase):
         self.assertEqual(pred_low_comb.recommended_action, "SKIP")
         self.assertIn("below 1.500", pred_low_comb.title)
 
-        # Test 5: Combined odds above 1.800 (e.g. 1.88) -> Must SKIP
+        # Test 5: Combined odds above 1.99 (e.g. 2.05) -> Must SKIP
         high_combined_data = {
             "title": "Risky Double",
+            "selections": [
+                {"fixture": "Liverpool vs Everton", "market": "Draw No Bet", "selection": "Liverpool", "odds": 1.45},
+                {"fixture": "Milan vs Roma", "market": "Over 1.5 Goals", "selection": "Over 1.5", "odds": 1.42},
+            ],
+            "combined_odds": 2.06,
+            "recommended_action": "BET"
+        }
+        pred_high_comb = AIPrediction.from_dict_flexible(high_combined_data, current_balance=500.0)
+        self.assertEqual(pred_high_comb.recommended_action, "SKIP")
+        self.assertIn("exceeds 2.00 ceiling", pred_high_comb.title)
+
+        # Combined odds at 1.89 (under 1.99 ceiling) -> Valid BET
+        valid_combo_data = {
+            "title": "Sweet Spot Double",
             "selections": [
                 {"fixture": "Liverpool vs Everton", "market": "Draw No Bet", "selection": "Liverpool", "odds": 1.38},
                 {"fixture": "Milan vs Roma", "market": "Over 1.5 Goals", "selection": "Over 1.5", "odds": 1.37},
@@ -194,9 +208,8 @@ class TestCompoundMathAndLedger(unittest.TestCase):
             "combined_odds": 1.89,
             "recommended_action": "BET"
         }
-        pred_high_comb = AIPrediction.from_dict_flexible(high_combined_data, current_balance=500.0)
-        self.assertEqual(pred_high_comb.recommended_action, "SKIP")
-        self.assertIn("exceeds 1.800", pred_high_comb.title)
+        pred_valid_comb = AIPrediction.from_dict_flexible(valid_combo_data, current_balance=500.0)
+        self.assertEqual(pred_valid_comb.recommended_action, "BET")
 
     def test_sportybet_helper_message(self):
         from telegram_bot.messages import format_sportybet_helper_message

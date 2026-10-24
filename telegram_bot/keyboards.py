@@ -16,10 +16,12 @@ def get_pick_action_keyboard(
 ) -> InlineKeyboardMarkup:
     """Returns interactive action buttons for a proposed daily pick with SportyBet link and ticket mode toggling."""
     sporty_base = getattr(config, "SPORTYBET_BASE_URL", "https://www.sportybet.com/ng").rstrip("/")
-    default_url = f"{sporty_base}/sport/basketball"
+    default_url = f"{sporty_base}/?shareCode={booking_code}" if booking_code else f"{sporty_base}/sport/basketball"
     fallback_label = "🏀 Open SportyBet Basketball"
 
     action_url = booking_url or default_url
+    if booking_code and "shareCode=" not in action_url:
+        action_url = f"{sporty_base}/?shareCode={booking_code}"
     action_label = f"🎟 Load Slip ({booking_code})" if booking_code else fallback_label
 
     if is_placed:
@@ -78,7 +80,7 @@ def get_mode_selector_keyboard(current_mode: str = "auto") -> InlineKeyboardMark
             InlineKeyboardButton(f"🎯 1-Leg Solo Lock (1.50 - 1.60){solo_check}", callback_data="set_mode_solo"),
         ],
         [
-            InlineKeyboardButton(f"🔀 2-Leg Safe Combo (1.50 - 1.80){combo_check}", callback_data="set_mode_combo"),
+            InlineKeyboardButton(f"🔀 2-Leg Safe Combo (1.50 - 1.99){combo_check}", callback_data="set_mode_combo"),
         ],
         [
             InlineKeyboardButton(f"⚖️ Auto-Balanced (Daily Smart Balance){auto_check}", callback_data="set_mode_auto"),

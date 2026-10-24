@@ -102,7 +102,7 @@ class TestOddsClampingAndLineVerification(unittest.TestCase):
         self.assertEqual(sel_flash["outcomeId"], "4")
 
     def test_2leg_odds_clamping_boundaries(self):
-        """Validates that 2-leg combination tickets strictly stay between 1.500 and 1.800."""
+        """Validates that 2-leg combination tickets strictly stay between 1.500 and 1.990 (ceiling 2.00)."""
         # Case A: Too low (< 1.50) -> SKIP
         data_low = {
             "title": "Low Combo",
@@ -116,20 +116,20 @@ class TestOddsClampingAndLineVerification(unittest.TestCase):
         self.assertEqual(pred_low.recommended_action, "SKIP")
         self.assertIn("below 1.500", pred_low.title)
 
-        # Case B: Too high (> 1.80) -> SKIP
+        # Case B: Too high (> 1.99 / 2.00 ceiling) -> SKIP
         data_high = {
             "title": "High Combo",
             "recommended_action": "BET",
             "selections": [
-                {"fixture": "Team A vs Team B", "sport": "basketball", "market": "Market 1", "selection": "Pick 1", "odds": 1.40},
-                {"fixture": "Team C vs Team D", "sport": "basketball", "market": "Market 2", "selection": "Pick 2", "odds": 1.40},
+                {"fixture": "Team A vs Team B", "sport": "basketball", "market": "Market 1", "selection": "Pick 1", "odds": 1.45},
+                {"fixture": "Team C vs Team D", "sport": "basketball", "market": "Market 2", "selection": "Pick 2", "odds": 1.42},
             ],
         }
         pred_high = AIPrediction.from_dict_flexible(data_high, current_balance=1000.0)
         self.assertEqual(pred_high.recommended_action, "SKIP")
-        self.assertIn("exceeds 1.800", pred_high.title)
+        self.assertIn("exceeds 2.00 ceiling", pred_high.title)
 
-        # Case C: Sweet spot (1.50 - 1.80) -> BET
+        # Case C: Sweet spot (1.50 - 1.99) -> BET
         data_valid = {
             "title": "Valid Combo",
             "recommended_action": "BET",
@@ -141,14 +141,63 @@ class TestOddsClampingAndLineVerification(unittest.TestCase):
         pred_valid = AIPrediction.from_dict_flexible(data_valid, current_balance=1000.0)
         self.assertEqual(pred_valid.recommended_action, "BET")
         self.assertEqual(pred_valid.combined_odds, 1.60)
-        self.assertTrue(1.50 <= pred_valid.combined_odds <= 1.80)
+        self.assertTrue(1.50 <= pred_valid.combined_odds <= 1.99)
+
+        # Case D: Upper boundary (e.g. 1.88, 1.95) -> BET
+        data_upper = {
+            "title": "Upper Boundary Combo",
+            "recommended_action": "BET",
+            "selections": [
+                {"fixture": "Team A vs Team B", "sport": "basketball", "market": "Winner (incl. Overtime)", "selection": "Team A (To Win)", "odds": 1.35},
+                {"fixture": "Team C vs Team D", "sport": "basketball", "market": "First Half Over/Under", "selection": "Under 118.5", "odds": 1.42},
+            ],
+        }
+        pred_upper = AIPrediction.from_dict_flexible(data_upper, current_balance=1000.0)
+        self.assertEqual(pred_upper.recommended_action, "BET")
+        self.assertEqual(pred_upper.combined_odds, 1.92)
+        self.assertTrue(1.50 <= pred_upper.combined_odds <= 1.99)
 
     def test_router_fallback_2leg_odds_and_flash_win(self):
-        """Verifies agent_router fallback generates 2-leg picks between 1.50 and 1.80 with Flash Win badges."""
+        """Verifies agent_router fallback generates 2-leg picks between 1.50 and 1.99 with Flash Win badges."""
         pick = self.router._generate_fallback_pick(current_day=1, current_balance=1000.0, preferred_mode="combo")
         self.assertEqual(len(pick.selections), 2)
-        self.assertTrue(1.50 <= pick.combined_odds <= 1.80, f"Odds {pick.combined_odds} outside 1.50-1.80!")
+        self.assertTrue(1.50 <= pick.combined_odds <= 1.99, f"Odds {pick.combined_odds} outside 1.50-1.99!")
         self.assertEqual(pick.combined_odds, round(pick.selections[0].odds * pick.selections[1].odds, 2))
+
+    def test_reroll_alternative_generates_share_code_url(self):
+        """Verifies that alternative pick on live games generates a valid SportyBet booking code and shareCode URL."""
+        from data_sources.odds_api import OddsApiClient
+        import asyncio
+
+        api = OddsApiClient()
+        # When previous proposed fixtures encompass today's matches
+        proposed_fixtures = ["Cleveland Cavaliers vs Brooklyn Nets", "Philadelphia 76ers vs Milwaukee Bucks"]
+        proposed_selections = ["Cleveland Cavaliers (To Win)", "Under 124.5"]
+
+        fixtures_summary = asyncio.run(api.get_upcoming_fixtures_summary(
+            exclude_fixtures=proposed_fixtures,
+            exclude_selections=proposed_selections,
+            force_refresh=True,
+        ))
+
+        # Fixtures summary should not be empty, nor should it discard live games
+        self.assertIn("BASKETBALL", fixtures_summary)
+
+        pred = self.router._generate_fallback_pick(
+            current_day=1,
+            current_balance=500.0,
+            fixtures_summary=fixtures_summary,
+            exclude_fixtures=proposed_fixtures,
+            exclude_selections=proposed_selections,
+            preferred_mode="auto",
+        )
+        self.assertIn(len(pred.selections), (1, 2))
+        self.assertTrue(1.50 <= pred.combined_odds <= 1.99)
+
+        booked = self.service.book_prediction(pred)
+        self.assertTrue(bool(booked.booking_code))
+        self.assertTrue(bool(booked.booking_url))
+        self.assertIn("?shareCode=", booked.booking_url)
 
     def test_telegram_flash_win_badge(self):
         """Ensures telegram pick card displays Flash Win / 15-Up Early Payout badge."""

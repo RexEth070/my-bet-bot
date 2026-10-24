@@ -30,7 +30,7 @@ services:
       - key: MIN_COMBINED_ODDS
         value: "1.500"
       - key: MAX_COMBINED_ODDS
-        value: "1.800"
+        value: "1.990"
       - key: WITHDRAWAL_CYCLE_DAYS
         value: "5"
       - key: WITHDRAWAL_PERCENTAGE

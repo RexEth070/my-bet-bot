@@ -205,10 +205,10 @@ class AIPrediction(BaseModel):
                         title = f"SKIP — 2-leg combined odds ({computed_odds:.2f}) below 1.500 minimum target"
                         factors.append(f"Odds Filter Guard: 2-leg ticket combined odds ({computed_odds:.2f}) must be at least 1.500.")
                         conf = 0
-                    elif computed_odds > 1.80:
+                    elif computed_odds > 1.99:
                         action = "SKIP"
-                        title = f"SKIP — 2-leg combined odds ({computed_odds:.2f}) exceeds 1.800 maximum ceiling"
-                        factors.append(f"Odds Filter Guard: 2-leg ticket combined odds ({computed_odds:.2f}) exceeds the strict 1.800 maximum.")
+                        title = f"SKIP — 2-leg combined odds ({computed_odds:.2f}) exceeds 2.00 ceiling (must not exceed 1.99)"
+                        factors.append(f"Odds Filter Guard: 2-leg ticket combined odds ({computed_odds:.2f}) exceeds the strict 1.99 maximum.")
                         conf = 0
                     else:
                         combined_odds = computed_odds
@@ -218,10 +218,10 @@ class AIPrediction(BaseModel):
                         title = f"SKIP — Combined odds ({combined_odds:.2f}) below 1.500 minimum target"
                         factors.append(f"Odds Filter Guard: Combined daily odds ({combined_odds:.2f}) must be at least 1.500.")
                         conf = 0
-                    elif combined_odds > 1.80:
+                    elif combined_odds > 1.99:
                         action = "SKIP"
-                        title = f"SKIP — Combined odds ({combined_odds:.2f}) exceeds 1.800 maximum ceiling"
-                        factors.append(f"Odds Filter Guard: Combined daily odds ({combined_odds:.2f}) exceeds the strict 1.800 maximum.")
+                        title = f"SKIP — Combined odds ({combined_odds:.2f}) exceeds 2.00 ceiling (must not exceed 1.99)"
+                        factors.append(f"Odds Filter Guard: Combined daily odds ({combined_odds:.2f}) exceeds the strict 1.99 maximum.")
                         conf = 0
 
         return cls(

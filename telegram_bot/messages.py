@@ -20,7 +20,7 @@ _Your 30-Day Compound Growth & Profit-Locking Agent_
    For every match, the bot quantitatively rates all 3 options side-by-side (95% to 99%+ win conviction) and selects ONLY the #1 ranked optimal option that guarantees the 98%–99% win rate!
 • Flexible High-Conviction Format:
    • *1-Leg Solo Pick:* When a single top-tier line has odds between *1.50 and 1.60* with a 99% win conviction rating (eliminating second-leg exposure!).
-   • *2-Leg Combo Ticket:* When combining two cushioned lines (*1.20 - 1.35*) to safely reach *1.500 - 1.800* combined odds.
+   • *2-Leg Combo Ticket:* When combining two cushioned lines (*1.20 - 1.35*) to safely reach *1.500 - 1.990* combined odds (max 1.99).
 • Odds Ceiling Rule: *Max 1.60 per leg* (non of each odds per match should exceed 1.60)
 • Strategy Duration: *30 Days*
 • 🛑 *5-Day Profit Rule:* Every 5 days, withdraw *50%* of accumulated balance to your bank account!
@@ -288,7 +288,7 @@ def format_sportybet_helper_message(target_bet, currency: str = "NGN") -> str:
 {code_block}🏆 *Match / Fixture:* `{target_bet.event_name}`
 🎯 *Market:* `{target_bet.market}`
 📊 *Selection:* `{target_bet.selection}`
-📈 *Odds:* `{target_bet.odds:.2f}` (Leg: 1.200 - 1.590 | Ticket: 1.500 - 1.800)
+📈 *Odds:* `{target_bet.odds:.2f}` (Leg: 1.200 - 1.590 | Ticket: 1.500 - 1.990)
 💵 *Stake to Input:* `{target_bet.stake:,.2f} {currency}`
 💰 *Potential Return:* `{potential_return:,.2f} {currency}`
 
@@ -324,7 +324,7 @@ def format_stats_dashboard_message(stats: dict, currency: str = "NGN") -> str:
 • Sport Focus: *🏀 NBA Basketball Exclusive*
 • Ticket Format: *1-Leg Solo (1.50 - 1.60) or 2-Leg Combo*
 • Odds Ceiling: *Max 1.60 per match* (strictly 1.200 - 1.600)
-• Target Daily Odds: *~{stats.get('avg_odds', 1.55):.2f}* (1.500 - 1.800)
+• Target Daily Odds: *~{stats.get('avg_odds', 1.55):.2f}* (1.500 - 1.990)
 • Early Settlement: *Halftime Settlement (1st Half), Over Points Clearance & 15-Up Early Payout*
 
 💡 _Tap **🏀 NBA Strategy** or type `/nba` to review active engine rules._
@@ -350,7 +350,7 @@ Before any pick is chosen for the day, the bot mathematically audits and rates A
 
 ⚡ *High-Conviction Ticket Structure:*
 • *1-Leg Solo Pick:* When a single alternate line has odds between *1.50 and 1.60* and a 99% win-rate rating (eliminates second-leg exposure completely!).
-• *2-Leg Combo Ticket:* When combining two heavily cushioned lines (*1.20 - 1.35*) to achieve *1.500 - 1.800* combined odds.
+• *2-Leg Combo Ticket:* When combining two heavily cushioned lines (*1.20 - 1.35*) to achieve *1.500 - 1.990* combined odds (max 1.99).
 • *Odds Cap:* Non of each odds per match should exceed **1.60** (strictly 1.200 - 1.600 per leg).
 
 🔬 *Advanced NBA Intelligence Engines (Active in Production):*
@@ -394,7 +394,7 @@ def format_mode_selection_message(current_mode: str = "auto") -> str:
     """Explains and formats ticket structure configuration."""
     mode_name = {
         "solo": "🎯 1-Leg Solo Lock (1.50 - 1.60)",
-        "combo": "🔀 2-Leg Safe Combo (1.50 - 1.80)",
+        "combo": "🔀 2-Leg Safe Combo (1.50 - 1.99)",
         "auto": "⚖️ Auto-Balanced (Daily Smart Balance)",
     }.get((current_mode or "auto").lower(), "⚖️ Auto-Balanced")
 
@@ -406,7 +406,7 @@ Active Preference: *{mode_name}*
 • *🎯 1-Leg Solo Lock (1.50 - 1.60 Odds):*
   Focuses 100% of capital on a single heavily-rated NBA line. Completely eliminates the risk of a second leg ruining your compound cycle!
 
-• *🔀 2-Leg Safe Combo (1.50 - 1.80 Combined Odds):*
+• *🔀 2-Leg Safe Combo (1.50 - 1.99 Combined Odds):*
   Picks two ultra-conservative lines (1.20 - 1.45 individual odds) with +10 to +16 point safety buffers from distinct matches that multiply safely together.
 
 • *⚖️ Auto-Balanced Mode:*

@@ -52,6 +52,7 @@ class OddsApiClient:
         max_matches: int = 50,
         basketball_limit: int = 60,
         exclude_fixtures: Optional[List[str]] = None,
+        exclude_selections: Optional[List[str]] = None,
         force_refresh: bool = False,
         **kwargs,
     ) -> str:
@@ -59,7 +60,7 @@ class OddsApiClient:
         global _GLOBAL_FIXTURES_CACHE, _GLOBAL_FIXTURES_CACHE_TS
 
         now_ts = time.time()
-        if not force_refresh and not exclude_fixtures and _GLOBAL_FIXTURES_CACHE and (now_ts - _GLOBAL_FIXTURES_CACHE_TS < _CACHE_TTL_SECONDS):
+        if not force_refresh and not exclude_fixtures and not exclude_selections and _GLOBAL_FIXTURES_CACHE and (now_ts - _GLOBAL_FIXTURES_CACHE_TS < _CACHE_TTL_SECONDS):
             logger.info("Serving upcoming fixtures from in-memory cache.")
             return _GLOBAL_FIXTURES_CACHE
 
@@ -74,9 +75,10 @@ class OddsApiClient:
                     bb_events=bb_events or [],
                     bb_limit=basketball_limit,
                     exclude_fixtures=exclude_fixtures,
+                    exclude_selections=exclude_selections,
                 )
                 if summary:
-                    if not exclude_fixtures:
+                    if not exclude_fixtures and not exclude_selections:
                         _GLOBAL_FIXTURES_CACHE = summary
                         _GLOBAL_FIXTURES_CACHE_TS = now_ts
                     logger.info(f"Ingested {len(bb_events or [])} Basketball fixtures strictly for TODAY from SportyBet NG.")
@@ -151,6 +153,7 @@ class OddsApiClient:
         events: Optional[List[Dict[str, Any]]] = None,
         max_matches: Optional[int] = None,
         exclude_fixtures: Optional[List[str]] = None,
+        exclude_selections: Optional[List[str]] = None,
         **kwargs,
     ) -> str:
         """Formats real live SportyBet NBA fixtures scheduled strictly for TODAY, exclusively offering Over/Under incl. OT and 1st Half Over/Under."""
@@ -179,6 +182,20 @@ class OddsApiClient:
         # If no explicit NBA events in live feed, use all basketball events as fallback
         events_to_process = nba_events if nba_events else bb_events
 
+        exclude_clean = [clean_team_name(x).lower() for x in (exclude_fixtures or []) if x]
+        exclude_sel_clean = [clean_team_name(x).lower() for x in (exclude_selections or []) if x]
+
+        # Check if excluding fixtures would leave 0 or fewer than 2 live events
+        surviving_events = [
+            e for e in events_to_process
+            if not any(ex in f"{clean_team_name(e.get('homeTeamName', ''))} vs {clean_team_name(e.get('awayTeamName', ''))}".lower() or
+                       f"{clean_team_name(e.get('homeTeamName', ''))} vs {clean_team_name(e.get('awayTeamName', ''))}".lower() in ex
+                       for ex in exclude_clean)
+        ]
+        # If excluding fixtures leaves fewer than 2 live matches, don't discard live matches!
+        # Instead, keep live matches so selections can be booked with live SportyBet shareCode.
+        active_exclude_fixtures = exclude_clean if len(surviving_events) >= 2 else []
+
         def get_priority(e):
             h_name = (e.get("homeTeamName") or "").lower()
             a_name = (e.get("awayTeamName") or "").lower()
@@ -198,14 +215,13 @@ class OddsApiClient:
             }
             collected = []
             nba_service = NBAIntelService()
-            exclude_clean = [clean_team_name(x).lower() for x in (exclude_fixtures or []) if x]
 
             for e in sorted_events:
                 home = clean_team_name(e.get("homeTeamName", "Home"))
                 away = clean_team_name(e.get("awayTeamName", "Away"))
                 tourn = clean_team_name(e.get("tournamentName", "NBA"))
                 fix_str = f"{home} vs {away}".lower()
-                if any(ex in fix_str or fix_str in ex for ex in exclude_clean):
+                if active_exclude_fixtures and any(ex in fix_str or fix_str in ex for ex in active_exclude_fixtures):
                     continue
 
                 extra_intel = ""
@@ -271,8 +287,16 @@ class OddsApiClient:
                             players_tag = f" | Stars: {edge_info.get('player_spotlight')}" if edge_info.get("player_spotlight") else ""
                             three_way_tag = f" | 3-Way Audit: {edge_info.get('three_way_verdict')}" if edge_info.get("three_way_verdict") else ""
 
+                            # Demote previously proposed selections on reroll so alternative options are prioritized
+                            desc_lower = desc.lower()
+                            is_excluded_sel = any(
+                                ex_s in desc_lower or desc_lower in ex_s
+                                for ex_s in exclude_sel_clean
+                            )
+                            tier_penalty = 12 if is_excluded_sel else 0
+
                             # Priority: 1-leg solo candidates get tier -5 (absolute top priority), high cushions get sorted ahead
-                            calculated_tier = -5 if is_solo else (tier + event_tier_bonus - int(cushion / 4.0))
+                            calculated_tier = (-5 if is_solo else (tier + event_tier_bonus - int(cushion / 4.0))) + tier_penalty
 
                             collected.append({
                                 "tier": calculated_tier,
@@ -294,7 +318,7 @@ class OddsApiClient:
             "CRITICAL ODDS & TICKET SELECTION CRITERIA:",
             "  - TICKET STRUCTURE: 1-LEG (SOLO) OR 2-LEGS (DOUBLE COMBO). MAX 2 LEGS!",
             "  - OPTION A (1-LEG SOLO): If an alternate Over/Under (incl. OT), 1st Half Over/Under, or Winner (incl. OT) [15-Up] line has odds between 1.500 and 1.600 with 98-99% win conviction, select it as a 1-LEG SOLO TICKET (eliminating 2nd leg risk).",
-            "  - OPTION B (2-LEG COMBO): If individual safe lines are lower (1.200 to 1.350), combine EXACTLY 2 legs to achieve combined 1.500 - 1.800 odds.",
+            "  - OPTION B (2-LEG COMBO): If individual safe lines are lower (1.200 to 1.350), combine EXACTLY 2 legs to achieve combined 1.500 - 1.990 odds (max 1.99).",
             "  - INDIVIDUAL ODDS LIMIT: Strictly 1.200 to 1.600 per match (NON of each odds per match should exceed 1.60).",
             "  - Target 98-99% win probability using alternate total cushions, 1st half defensive pace matchups, or 15-Up Early Payout lead protection.",
             "---------------------------------------------------------------------------------------",

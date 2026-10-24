@@ -433,8 +433,10 @@ class TelegramBetBot:
         preferred_mode = self.ledger.get_user_mode_preference(user_id)
         proposed = self.ledger.get_proposed_bet(user_id)
         exclude_fixtures = []
+        exclude_selections = []
         if proposed:
             exclude_fixtures = [f.strip() for f in proposed.event_name.split("+") if f.strip()]
+            exclude_selections = [s.strip() for s in proposed.selection.split("+") if s.strip()]
             # In auto mode, alternate ticket format on reroll for variety
             if preferred_mode == "auto":
                 prev_legs = len(proposed.selection.split("+"))
@@ -448,6 +450,7 @@ class TelegramBetBot:
         fixtures_data = await self.odds_api.get_upcoming_fixtures_summary(
             basketball_limit=60,
             exclude_fixtures=exclude_fixtures,
+            exclude_selections=exclude_selections,
             force_refresh=True,
         )
 
@@ -457,6 +460,7 @@ class TelegramBetBot:
             current_balance=state.current_balance,
             currency=config.DEFAULT_CURRENCY,
             exclude_fixtures=exclude_fixtures,
+            exclude_selections=exclude_selections,
             preferred_mode=preferred_mode,
         )
 
@@ -614,7 +618,7 @@ class TelegramBetBot:
 💡 *Strict Rules:*
 • Sport: Strictly NBA Basketball.
 • Markets: Strictly Over/Under (incl. OT) & 1st Half Over/Under.
-• Format: 1-Leg Solo (1.50 - 1.60 odds) or 2-Leg Combo (1.20 - 1.45 each, combined 1.50 - 1.80).
+• Format: 1-Leg Solo (1.50 - 1.60 odds) or 2-Leg Combo (1.20 - 1.45 each, combined 1.50 - 1.99).
 • Max Leg Odds: 1.60 per match.
 """
         await target_msg.reply_text(help_text, parse_mode="Markdown")
@@ -816,7 +820,7 @@ class TelegramBetBot:
                 await query.edit_message_reply_markup(reply_markup=get_mode_selector_keyboard("combo"))
             except Exception:
                 pass
-            await query.answer("Ticket format set to 2-Leg Safe Combo (1.50 - 1.80)!", show_alert=True)
+            await query.answer("Ticket format set to 2-Leg Safe Combo (1.50 - 1.99)!", show_alert=True)
 
         elif data == "set_mode_auto":
             self.ledger.set_user_mode_preference(user_id, "auto")

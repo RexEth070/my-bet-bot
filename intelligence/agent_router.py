@@ -63,12 +63,13 @@ class AgentRouterClient:
         current_balance: float,
         currency: str = "NGN",
         exclude_fixtures: Optional[List[str]] = None,
+        exclude_selections: Optional[List[str]] = None,
         preferred_mode: Optional[str] = "auto",
     ) -> AIPrediction:
         """Sends match data to LLM via AgentRouter and returns vetted pick."""
         if not self.api_key or "your_" in self.api_key:
             logger.warning("No valid AGENTROUTER_API_KEY configured. Returning calibrated test pick.")
-            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
+            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, exclude_selections=exclude_selections, preferred_mode=preferred_mode)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -145,13 +146,13 @@ class AgentRouterClient:
                     if pred.recommended_action == "BET" and len(pred.selections) in (1, 2):
                         return pred
                     logger.warning(f"Parsed prediction did not meet strict NBA totals 1/2-leg criteria ({pred.title}). Falling back to live vetted pick.")
-                    return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
+                    return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, exclude_selections=exclude_selections, preferred_mode=preferred_mode)
 
                 logger.info("Using instant live-vetted fallback pick.")
-                return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
+                return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, exclude_selections=exclude_selections, preferred_mode=preferred_mode)
         except Exception as e:
             logger.warning(f"AgentRouter LLM response delayed/failed ({e}) — using live-vetted high-conviction fallback.")
-            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
+            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, exclude_selections=exclude_selections, preferred_mode=preferred_mode)
 
     def _generate_fallback_pick(
         self,
@@ -159,10 +160,12 @@ class AgentRouterClient:
         current_balance: float,
         fixtures_summary: str = "",
         exclude_fixtures: Optional[List[str]] = None,
+        exclude_selections: Optional[List[str]] = None,
         preferred_mode: Optional[str] = "auto",
     ) -> AIPrediction:
         """Generates a high-conviction 1-leg solo lock or 2-leg combo ticket with balanced market diversity."""
         exclude_clean = [clean_team_name(x).lower() for x in (exclude_fixtures or []) if x]
+        exclude_sel_clean = [x.strip().lower() for x in (exclude_selections or []) if x]
         mode = (preferred_mode or "auto").lower()
 
         parsed_candidates = []
@@ -172,10 +175,19 @@ class AgentRouterClient:
                 re.IGNORECASE
             )
             matches = pattern.findall(fixtures_summary)
+
+            # Check if excluding fixtures would leave 0 live events
+            all_raw_fixtures = {m[2].strip().lower() for m in matches}
+            surviving_fixtures = {
+                f for f in all_raw_fixtures
+                if not any(ex in f or f in ex for ex in exclude_clean)
+            }
+            active_exclude_fixtures = exclude_clean if len(surviving_fixtures) >= 2 else []
+
             for sport, tourn, fixture, mkt, sel, odds_str in matches:
                 clean_fix = fixture.strip()
                 fix_lower = clean_fix.lower()
-                if any(ex in fix_lower or fix_lower in ex for ex in exclude_clean):
+                if active_exclude_fixtures and any(ex in fix_lower or fix_lower in ex for ex in active_exclude_fixtures):
                     continue
                 try:
                     odds_val = float(odds_str.strip())
@@ -240,6 +252,10 @@ class AgentRouterClient:
                 )
                 cand_opt = edge_res.get("candidate_option_number") or (3 if is_win_market else (2 if is_1st_half else 1))
                 is_audit_winner = edge_res.get("is_audit_winner", False)
+                is_excluded_sel = any(
+                    ex in sel_lower or sel_lower in ex
+                    for ex in exclude_sel_clean
+                ) if exclude_sel_clean else False
 
                 parsed_candidates.append({
                     "fixture": clean_fix,
@@ -252,6 +268,7 @@ class AgentRouterClient:
                     "is_audit_winner": is_audit_winner,
                     "is_solo": edge_res.get("is_solo_candidate", False) or (1.50 <= odds_val <= 1.60 and cushion >= 5.0 and is_audit_winner),
                     "is_win_market": is_win_market,
+                    "is_excluded_sel": is_excluded_sel,
                     "selection_obj": m_sel,
                 })
 
@@ -259,11 +276,11 @@ class AgentRouterClient:
         solo_candidates = [c for c in parsed_candidates if 1.50 <= c["odds"] <= 1.60 and c["cushion"] > 0]
         if not solo_candidates:
             solo_candidates = [c for c in parsed_candidates if 1.50 <= c["odds"] <= 1.60]
-        # Prioritize true audit winners, then win probability and safety cushion
-        solo_candidates.sort(key=lambda x: (x["is_audit_winner"], x["win_p"], x["cushion"]), reverse=True)
+        # Prioritize non-excluded candidates, true audit winners, then win probability and safety cushion
+        solo_candidates.sort(key=lambda x: (not x.get("is_excluded_sel", False), x["is_audit_winner"], x["win_p"], x["cushion"]), reverse=True)
         best_solo = [solo_candidates[0]["selection_obj"]] if solo_candidates else None
 
-        # Track 2: Best 2-Leg Combination Candidate (distinct fixtures, combined odds strictly 1.50 - 1.80)
+        # Track 2: Best 2-Leg Combination Candidate (distinct fixtures, combined odds strictly 1.50 - 1.99)
         combo_legs = [c for c in parsed_candidates if 1.16 <= c["odds"] <= 1.50 and c["cushion"] > 0]
         if len(combo_legs) < 2:
             combo_legs = [c for c in parsed_candidates if 1.16 <= c["odds"] <= 1.50]
@@ -277,13 +294,14 @@ class AgentRouterClient:
                 if c1["fixture"] == c2["fixture"]:
                     continue
                 comb = round(c1["odds"] * c2["odds"], 2)
-                # Strictly clamp combined odds: never below 1.50, never above 1.80 (nor above 2.0)
-                if 1.50 <= comb <= 1.80:
+                # Strictly clamp combined odds: never below 1.50, never exceeding 1.99 (ceiling 2.00)
+                if 1.50 <= comb <= 1.99:
                     # Preference score incorporates win probabilities, cushions, audit-winner status, Flash Win bonus, and market diversity
                     diversity_bonus = 2.0 if (c1["is_win_market"] != c2["is_win_market"]) else 0.0
                     audit_bonus = (3.0 if c1["is_audit_winner"] else 0.0) + (3.0 if c2["is_audit_winner"] else 0.0)
                     flash_win_bonus = 4.0 if (c1["is_win_market"] or c2["is_win_market"]) else 0.0
-                    score = (c1["win_p"] + c2["win_p"]) + (c1["cushion"] + c2["cushion"]) * 0.2 + diversity_bonus + audit_bonus + flash_win_bonus
+                    exclusion_penalty = (-20.0 if c1.get("is_excluded_sel") else 0.0) + (-20.0 if c2.get("is_excluded_sel") else 0.0)
+                    score = (c1["win_p"] + c2["win_p"]) + (c1["cushion"] + c2["cushion"]) * 0.2 + diversity_bonus + audit_bonus + flash_win_bonus + exclusion_penalty
                     if score > best_combo_score:
                         best_combo_score = score
                         best_combo = [c1["selection_obj"], c2["selection_obj"]]
@@ -425,13 +443,13 @@ class AgentRouterClient:
             comb_odds = round(selections[0].odds * selections[1].odds, 2)
             ticket_title = f"Vetted High-Conviction 2-Leg Ticket ({selections[0].selection} + {selections[1].selection})"
 
-        # Strictly enforce 2-leg combination odds boundaries (never below 1.50, never above 1.80):
-        if len(selections) == 2 and (comb_odds < 1.50 or comb_odds > 1.80):
-            logger.warning(f"Calculated 2-leg combined odds ({comb_odds}) outside 1.50 - 1.80 window. Calibrating with verified preset.")
+        # Strictly enforce 2-leg combination odds boundaries (never below 1.50, never exceeding 1.99):
+        if len(selections) == 2 and (comb_odds < 1.50 or comb_odds > 1.99):
+            logger.warning(f"Calculated 2-leg combined odds ({comb_odds}) outside 1.50 - 1.99 window. Calibrating with verified preset.")
             for opt in filtered_presets:
                 if len(opt) == 2:
                     p_comb = round(opt[0].odds * opt[1].odds, 2)
-                    if 1.50 <= p_comb <= 1.80:
+                    if 1.50 <= p_comb <= 1.99:
                         selections = opt
                         comb_odds = p_comb
                         ticket_title = f"Vetted High-Conviction 2-Leg Ticket ({selections[0].selection} + {selections[1].selection})"

@@ -492,7 +492,7 @@ class SportyBetService:
             fix_sig = "".join(f"{s.fixture}{s.selection}{s.odds}" for s in prediction.selections)
             short_hash = hashlib.md5(fix_sig.encode()).hexdigest()[:6].upper()
             prediction.booking_code = f"NB{short_hash}"
-            prediction.booking_url = "https://www.sportybet.com/ng/sport/basketball"
-            logger.info(f"Attached direct SportyBet booking code: {prediction.booking_code}")
+            prediction.booking_url = f"https://www.sportybet.com/ng/?shareCode={prediction.booking_code}"
+            logger.info(f"Attached direct SportyBet booking code: {prediction.booking_code} -> {prediction.booking_url}")
 
         return prediction
