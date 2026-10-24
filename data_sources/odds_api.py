@@ -46,6 +46,11 @@ class OddsApiClient:
         _GLOBAL_FIXTURES_CACHE = ""
         _GLOBAL_FIXTURES_CACHE_TS = 0.0
         logger.info("Cleared global fixtures memory cache.")
+        try:
+            from intelligence.sportybet_service import SportyBetService
+            SportyBetService.clear_cache()
+        except Exception:
+            pass
 
     async def get_upcoming_fixtures_summary(
         self,
@@ -171,11 +176,14 @@ class OddsApiClient:
         ]
 
         def is_nba(e):
-            t_name = (e.get("tournamentName") or "").lower()
-            h_name = (e.get("homeTeamName") or "").lower()
-            a_name = (e.get("awayTeamName") or "").lower()
+            t_name = (e.get("tournamentName") or "").strip().lower()
             if "nba" in t_name or "national basketball" in t_name:
                 return True
+            non_nba_tournaments = ["nbl", "euroleague", "bbl", "serie a", "super lig", "lnb", "eurocup", "pro a", "cba", "nbb", "premijer", "vtb"]
+            if any(nt in t_name for nt in non_nba_tournaments):
+                return False
+            h_name = (e.get("homeTeamName") or "").lower()
+            a_name = (e.get("awayTeamName") or "").lower()
             return any(k in f"{h_name} {a_name}" for k in nba_team_keywords)
 
         nba_events = [e for e in bb_events if is_nba(e)]

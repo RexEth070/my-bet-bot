@@ -70,6 +70,12 @@ class SportyBetService:
     def __init__(self, timeout: float = 4.5):
         self.timeout = timeout
 
+    @classmethod
+    def clear_cache(cls):
+        """Wipes the cached SportyBet events."""
+        global _SPORTY_EVENTS_CACHE
+        _SPORTY_EVENTS_CACHE.clear()
+
     def get_upcoming_events(self, sport_id: str = "sr:sport:2", page_size: int = 50) -> List[Dict[str, Any]]:
         """Pulls strictly TODAY's upcoming fixtures and rich market odds from SportyBet NG (cached 5m)."""
         now = time.time()
@@ -86,8 +92,6 @@ class SportyBetService:
             "marketId": market_ids,
             "pageSize": str(safe_page_size),
             "pageNum": "1",
-            "todayGames": "true",
-            "timeline": "24",
         }
         try:
             with httpx.Client(timeout=self.timeout, headers=self.HEADERS) as client:
@@ -111,7 +115,8 @@ class SportyBetService:
                                 events.append(e)
 
                     logger.info(f"SportyBet fetched {len(events)} events strictly scheduled for TODAY.")
-                    _SPORTY_EVENTS_CACHE[sport_id] = (time.time(), events)
+                    if events:
+                        _SPORTY_EVENTS_CACHE[sport_id] = (time.time(), events)
                     return events
         except Exception as e:
             logger.warning(f"SportyBet get_upcoming_events error: {e}")
