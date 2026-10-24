@@ -920,8 +920,11 @@ def create_bot_application(
     post_init: Optional[Callable] = None,
 ) -> Application:
     """Builds and wires up the Telegram Application."""
+    from telegram.request import HTTPXRequest
+
     bot = TelegramBetBot(ledger=ledger, agent=agent, odds_api=odds_api)
-    builder = Application.builder().token(token)
+    req = HTTPXRequest(connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0)
+    builder = Application.builder().token(token).request(req)
     if post_init:
         builder.post_init(post_init)
 
