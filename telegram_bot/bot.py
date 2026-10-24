@@ -44,23 +44,42 @@ class TelegramBetBot:
             return allowed_id == "" or str(user_id) == allowed_id
         return True
 
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def _get_target_message(self, update: Update, message_target=None):
+        """Safely returns the message object to reply to whether invoked via text command or callback query."""
+        if message_target:
+            return message_target
+        if update.message:
+            return update.message
+        if update.callback_query and update.callback_query.message:
+            return update.callback_query.message
+        if update.effective_message:
+            return update.effective_message
+        return None
+
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
+        target_msg = self._get_target_message(update, message_target)
         if not self.is_user_allowed(user_id):
-            await update.message.reply_text("⛔ Unauthorized access.")
+            if target_msg:
+                await target_msg.reply_text("⛔ Unauthorized access.")
             return
 
         state = self.ledger.get_or_create_user(user_id, initial_stake=config.DEFAULT_INITIAL_STAKE)
         msg = messages.format_welcome_message(user_id, state)
-        await update.message.reply_text(
-            msg,
-            parse_mode="Markdown",
-            reply_markup=get_main_reply_keyboard(),
-        )
+        if target_msg:
+            await target_msg.reply_text(
+                msg,
+                parse_mode="Markdown",
+                reply_markup=get_main_reply_keyboard(),
+            )
 
-    async def today_pick_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def today_pick_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         # Trigger background auto-settlement asynchronously without blocking user response
@@ -70,7 +89,7 @@ class TelegramBetBot:
         except Exception as e:
             logger.debug(f"Auto-settler background task error: {e}")
 
-        status_msg = await update.message.reply_text("⚡ *Selecting today's top winning pick...*", parse_mode="Markdown")
+        status_msg = await target_msg.reply_text("⚡ *Selecting today's top winning pick...*", parse_mode="Markdown")
 
         state = self.ledger.get_or_create_user(user_id)
         preferred_mode = self.ledger.get_user_mode_preference(user_id)
@@ -121,7 +140,7 @@ class TelegramBetBot:
             await status_msg.delete()
         except Exception:
             pass
-        await update.message.reply_text(
+        await target_msg.reply_text(
             pick_msg,
             parse_mode="Markdown",
             reply_markup=get_pick_action_keyboard(
@@ -133,9 +152,13 @@ class TelegramBetBot:
             ),
         )
 
-    async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def balance_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         # Trigger background auto-settlement asynchronously without blocking user response
@@ -147,20 +170,28 @@ class TelegramBetBot:
 
         state = self.ledger.get_or_create_user(user_id)
         msg = messages.format_balance_message(state)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-    async def cycle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def cycle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
             return
 
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
+            return
+
         state = self.ledger.get_or_create_user(user_id)
         msg = messages.format_cycle_plan_message(initial_stake=state.initial_stake, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-    async def recent_bets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def recent_bets_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         # Proactively check and grade any concluded bets before displaying history
@@ -171,12 +202,15 @@ class TelegramBetBot:
 
         bets = self.ledger.get_recent_bets(user_id=user_id, limit=5)
         msg = messages.format_recent_bets_message(bets, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-
-    async def win_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def win_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         actual_payout = None
@@ -189,23 +223,27 @@ class TelegramBetBot:
 
         outcome = self.ledger.log_bet_outcome(user_id=user_id, won=True, actual_payout=actual_payout)
         msg = messages.format_outcome_win_message(outcome, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-    async def loss_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def loss_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         recent_before = self.ledger.get_recent_bets(user_id=user_id, limit=1)
         outcome = self.ledger.log_bet_outcome(user_id=user_id, won=False)
         msg = messages.format_outcome_loss_message(outcome, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
         # Run AI Postmortem forensic analysis
         if recent_before:
             last_bet = recent_before[0]
             try:
-                status_msg = await update.message.reply_text("🔬 *Conducting AI postmortem on the loss to extract learning rules...*", parse_mode="Markdown")
+                status_msg = await target_msg.reply_text("🔬 *Conducting AI postmortem on the loss to extract learning rules...*", parse_mode="Markdown")
                 analysis = await analyze_loss(self.agent, last_bet.event_name, last_bet.selection, last_bet.odds)
                 await status_msg.edit_text(
                     f"🧠 *AI Postmortem Forensic Analysis:*\n\n{analysis}\n\n_Heuristic rule saved. Future pre-match filters will strictly avoid this trap._",
@@ -214,20 +252,28 @@ class TelegramBetBot:
             except Exception as e:
                 logger.error(f"Postmortem error: {e}")
 
-    async def reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def reset_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
             return
 
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
+            return
+
         self.ledger.reset_challenge(user_id=user_id, initial_stake=config.DEFAULT_INITIAL_STAKE)
-        await update.message.reply_text(
+        await target_msg.reply_text(
             f"🔄 *Challenge Reset!* Ready to begin Day 1 with {config.DEFAULT_INITIAL_STAKE:,.2f} {config.DEFAULT_CURRENCY}.",
             parse_mode="Markdown",
         )
 
-    async def placed_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def placed_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         recent = self.ledger.get_recent_bets(user_id=user_id, limit=5)
@@ -235,7 +281,7 @@ class TelegramBetBot:
         if not proposed:
             active = next((b for b in recent if b.outcome in ("PLACED", "PENDING")), None)
             if active:
-                await update.message.reply_text(
+                await target_msg.reply_text(
                     f"🔒 *Bet Already Active & Monitored:*\n\n"
                     f"• Fixture: `{active.event_name}`\n"
                     f"• Pick: `{active.selection}` @ `{active.odds:.2f}`\n"
@@ -244,7 +290,7 @@ class TelegramBetBot:
                     parse_mode="Markdown",
                 )
             else:
-                await update.message.reply_text(
+                await target_msg.reply_text(
                     "ℹ️ No active prediction waiting to be placed. Tap `/today` first to generate today's pick!",
                     parse_mode="Markdown",
                 )
@@ -253,41 +299,49 @@ class TelegramBetBot:
         placed_bet = self.ledger.confirm_bet_placed(user_id=user_id, bet_id=proposed.id)
         if placed_bet:
             conf_msg = messages.format_bet_placed_confirmation(placed_bet, currency=config.DEFAULT_CURRENCY)
-            await update.message.reply_text(conf_msg, parse_mode="Markdown")
+            await target_msg.reply_text(conf_msg, parse_mode="Markdown")
         else:
-            await update.message.reply_text("⚠️ Could not mark bet as placed.", parse_mode="Markdown")
+            await target_msg.reply_text("⚠️ Could not mark bet as placed.", parse_mode="Markdown")
 
-    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def clear_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         recent = self.ledger.get_recent_bets(user_id=user_id, limit=5)
         target = next((b for b in recent if b.outcome in ("PROPOSED", "PLACED", "PENDING")), None)
         if not target:
-            await update.message.reply_text("ℹ️ No active bet or prediction to clear.", parse_mode="Markdown")
+            await target_msg.reply_text("ℹ️ No active bet or prediction to clear.", parse_mode="Markdown")
             return
 
         self.ledger.clear_bet(user_id=user_id, bet_id=target.id)
         conf_msg = messages.format_bet_cleared_confirmation()
-        await update.message.reply_text(conf_msg, parse_mode="Markdown")
+        await target_msg.reply_text(conf_msg, parse_mode="Markdown")
 
-    async def helper_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def helper_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         recent = self.ledger.get_recent_bets(user_id=user_id, limit=5)
         target_bet = next((b for b in recent if b.outcome in ("PROPOSED", "PLACED", "PENDING")), None)
         if not target_bet:
-            await update.message.reply_text(
+            await target_msg.reply_text(
                 "ℹ️ No active bet or pick found. Tap `/today` first to generate today's pick!",
                 parse_mode="Markdown",
             )
             return
 
         help_text = messages.format_sportybet_helper_message(target_bet, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(help_text, parse_mode="Markdown")
+        await target_msg.reply_text(help_text, parse_mode="Markdown")
 
     async def reroll_pick_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
@@ -305,7 +359,9 @@ class TelegramBetBot:
                 prev_legs = len(proposed.selection.split("+"))
                 preferred_mode = "combo" if prev_legs == 1 else "solo"
 
-        reply_to = message_target or (update.message or (update.callback_query.message if update.callback_query else None))
+        reply_to = self._get_target_message(update, message_target)
+        if not reply_to:
+            return
         status_msg = await reply_to.reply_text("🔄 *Rerolling an alternative high-conviction NBA pick...*", parse_mode="Markdown")
 
         fixtures_data = await self.odds_api.get_upcoming_fixtures_summary(
@@ -370,31 +426,43 @@ class TelegramBetBot:
             ),
         )
 
-    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         stats = self.ledger.get_user_performance_stats(user_id)
         msg = messages.format_stats_dashboard_message(stats, currency=config.DEFAULT_CURRENCY)
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-    async def nba_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def nba_strategy_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
             return
 
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
+            return
+
         msg = messages.format_nba_strategy_message()
         from telegram_bot.keyboards import get_nba_strategy_keyboard
-        await update.message.reply_text(
+        await target_msg.reply_text(
             msg,
             parse_mode="Markdown",
             reply_markup=get_nba_strategy_keyboard(),
         )
 
-    async def mode_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def mode_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         if context.args and len(context.args) > 0:
@@ -406,7 +474,7 @@ class TelegramBetBot:
             else:
                 mode = "auto"
             self.ledger.set_user_mode_preference(user_id, mode)
-            await update.message.reply_text(
+            await target_msg.reply_text(
                 f"✅ *Ticket format updated to:* `{mode.upper()}`\n\n"
                 f"Tap *🎯 Today's Pick* or type `/today` to scan with this format!",
                 parse_mode="Markdown",
@@ -416,26 +484,33 @@ class TelegramBetBot:
 
         current_mode = self.ledger.get_user_mode_preference(user_id)
         msg = messages.format_mode_selection_message(current_mode)
-        await update.message.reply_text(
+        await target_msg.reply_text(
             msg,
             parse_mode="Markdown",
             reply_markup=get_mode_selector_keyboard(current_mode),
         )
 
-    async def clear_all_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def clear_all_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
+            return
+
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
             return
 
         self.odds_api.clear_cache()
         self.ledger.clear_all_user_memories(user_id=user_id, initial_stake=config.DEFAULT_INITIAL_STAKE)
         msg = messages.format_memory_cleared_message()
-        await update.message.reply_text(msg, parse_mode="Markdown")
+        await target_msg.reply_text(msg, parse_mode="Markdown")
 
-    async def sport_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await self.nba_strategy_command(update, context)
+    async def sport_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
+        await self.nba_strategy_command(update, context, message_target=message_target)
 
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
+        target_msg = self._get_target_message(update, message_target)
+        if not target_msg:
+            return
         help_text = f"""ℹ️ *Available Commands & NBA Guide:*
 
 • `/today` — Analyze today's top NBA pick (1-Leg Solo or 2-Leg Combo).
@@ -460,7 +535,7 @@ class TelegramBetBot:
 • Format: 1-Leg Solo (1.50 - 1.60 odds) or 2-Leg Combo (1.20 - 1.45 each, combined 1.50 - 1.80).
 • Max Leg Odds: 1.60 per match.
 """
-        await update.message.reply_text(help_text, parse_mode="Markdown")
+        await target_msg.reply_text(help_text, parse_mode="Markdown")
 
     async def handle_text_buttons(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = update.message.text
@@ -695,16 +770,19 @@ class TelegramBetBot:
             await query.answer("🏀 Engine is locked to NBA Basketball Over/Under totals (incl. OT & 1st Half)!", show_alert=True)
 
         elif data == "btn_today_pick":
-            await self.today_pick_command(update, context)
+            await self.today_pick_command(update, context, message_target=query.message)
 
         elif data == "view_stats":
-            await self.stats_command(update, context)
+            await self.stats_command(update, context, message_target=query.message)
 
         elif data in ("btn_clear_memory", "clear_all_memory"):
-            await self.clear_all_command(update, context)
+            await self.clear_all_command(update, context, message_target=query.message)
 
         elif data == "btn_cycle_plan":
-            await self.cycle_command(update, context)
+            await self.cycle_command(update, context, message_target=query.message)
+
+        elif data == "view_balance":
+            await self.balance_command(update, context, message_target=query.message)
 
         elif data.startswith("bet_info_"):
             await query.answer("🔒 This bet is locked into active memory and being monitored live by the bot!", show_alert=True)
