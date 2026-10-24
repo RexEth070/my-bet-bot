@@ -9,6 +9,7 @@ from intelligence.agent_router import AgentRouterClient
 from data_sources.odds_api import OddsApiClient
 from telegram_bot.keyboards import get_pick_action_keyboard
 from telegram_bot import messages
+from telegram_bot.bot import send_safe_telegram_message
 import config
 
 logger = logging.getLogger(__name__)
@@ -81,10 +82,11 @@ def setup_scheduler(
 
             pick_msg = messages.format_daily_pick_message(prediction, state)
             primary_sport = prediction.selections[0].sport if prediction.selections else "basketball"
-            await app.bot.send_message(
-                chat_id=user_id,
+            await send_safe_telegram_message(
+                target=app.bot,
                 text=pick_msg,
                 parse_mode="Markdown",
+                chat_id=user_id,
                 reply_markup=get_pick_action_keyboard(
                     bet_id,
                     sport=primary_sport,

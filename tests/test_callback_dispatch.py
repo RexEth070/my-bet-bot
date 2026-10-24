@@ -87,3 +87,59 @@ class TestCallbackDispatch(unittest.IsolatedAsyncioTestCase):
 
             query.answer.assert_called()
             mock_msg.reply_text.assert_called()
+
+    async def test_split_telegram_message(self):
+        """Verify long message splitting under 3900 characters."""
+        from telegram_bot.bot import split_telegram_message
+
+        short_msg = "Hello World"
+        self.assertEqual(split_telegram_message(short_msg), ["Hello World"])
+
+        long_msg = ("A" * 2500) + "\n\n" + ("B" * 2500)
+        chunks = split_telegram_message(long_msg, max_chunk_size=3000)
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(all(len(c) <= 3000 for c in chunks))
+        self.assertEqual(chunks[0], "A" * 2500)
+        self.assertEqual(chunks[1], "B" * 2500)
+
+    async def test_send_safe_telegram_message_splits_and_attaches_markup(self):
+        """Verify send_safe_telegram_message splits large text and puts markup on the final chunk."""
+        from telegram_bot.bot import send_safe_telegram_message
+
+        mock_target = MagicMock(spec=Message)
+        mock_target.reply_text = AsyncMock()
+
+        long_text = ("Part 1 " * 400) + "\n\n" + ("Part 2 " * 400)
+        markup = MagicMock()
+
+        await send_safe_telegram_message(
+            target=mock_target,
+            text=long_text,
+            parse_mode="Markdown",
+            reply_markup=markup,
+            max_chunk_size=2000,
+        )
+
+        self.assertGreaterEqual(mock_target.reply_text.call_count, 2)
+        # Verify final call had the reply_markup
+        last_call_args = mock_target.reply_text.call_args_list[-1]
+        self.assertEqual(last_call_args.kwargs["reply_markup"], markup)
+
+    async def test_send_safe_telegram_message_markdown_fallback(self):
+        """Verify send_safe_telegram_message falls back to parse_mode=None on entity error."""
+        from telegram_bot.bot import send_safe_telegram_message
+
+        mock_target = MagicMock(spec=Message)
+        # First call fails (bad markdown), second call succeeds (plain text)
+        mock_target.reply_text = AsyncMock(side_effect=[Exception("Can't parse entities"), MagicMock()])
+
+        await send_safe_telegram_message(
+            target=mock_target,
+            text="Unclosed *markdown tag",
+            parse_mode="Markdown",
+        )
+
+        self.assertEqual(mock_target.reply_text.call_count, 2)
+        # Second attempt should have parse_mode=None
+        self.assertIsNone(mock_target.reply_text.call_args_list[1].kwargs["parse_mode"])
+

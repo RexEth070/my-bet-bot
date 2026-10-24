@@ -81,9 +81,11 @@ _{prediction.title}_
             if edge.get("h2h_summary"):
                 selections_text += f"   • 📊 *H2H Trend:* _{edge['h2h_summary']}_\n"
             if edge.get("home_l10_summary"):
-                selections_text += f"   • 📈 *Home L10 Form:* _{edge['home_l10_summary']}_\n"
+                clean_home_l10 = edge['home_l10_summary'].split(' | Recent:')[0]
+                selections_text += f"   • 📈 *Home L10 Form:* _{clean_home_l10}_\n"
             if edge.get("away_l10_summary"):
-                selections_text += f"   • 📈 *Away L10 Form:* _{edge['away_l10_summary']}_\n"
+                clean_away_l10 = edge['away_l10_summary'].split(' | Recent:')[0]
+                selections_text += f"   • 📈 *Away L10 Form:* _{clean_away_l10}_\n"
             if edge.get("player_spotlight"):
                 selections_text += f"   • ⭐ *Key Players:* `{edge['player_spotlight']}`\n"
             if edge.get("star_notes"):

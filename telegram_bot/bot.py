@@ -30,6 +30,83 @@ import config
 logger = logging.getLogger(__name__)
 
 
+def split_telegram_message(text: str, max_chunk_size: int = 3900) -> list[str]:
+    """Splits a long message into chunks under max_chunk_size, preferring paragraph and newline breaks."""
+    if len(text) <= max_chunk_size:
+        return [text]
+
+    chunks = []
+    remaining = text
+    while len(remaining) > max_chunk_size:
+        # 1. Prefer paragraph break (\n\n)
+        split_idx = remaining.rfind("\n\n", 0, max_chunk_size)
+        # 2. Prefer newline break (\n) if paragraph break is too early (< 1/3 of max_chunk_size)
+        if split_idx == -1 or split_idx < max_chunk_size // 3:
+            split_idx = remaining.rfind("\n", 0, max_chunk_size)
+        # 3. Prefer space break if newline is too early
+        if split_idx == -1 or split_idx < max_chunk_size // 3:
+            split_idx = remaining.rfind(" ", 0, max_chunk_size)
+        # 4. Fallback to hard cutoff
+        if split_idx == -1:
+            split_idx = max_chunk_size
+
+        chunk = remaining[:split_idx].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_idx:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
+async def send_safe_telegram_message(
+    target,
+    text: str,
+    parse_mode: str = "Markdown",
+    reply_markup=None,
+    chat_id=None,
+    max_chunk_size: int = 3900,
+):
+    """
+    Safely delivers a message to Telegram by:
+    1. Splitting content exceeding Telegram's 4,096 char limit into clean paragraph-aligned chunks.
+    2. Falling back to plain text if Markdown entity parsing fails.
+    3. Attaching the reply_markup keyboard only to the final message chunk.
+    """
+    chunks = split_telegram_message(text, max_chunk_size=max_chunk_size)
+    sent_messages = []
+
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        markup = reply_markup if is_last else None
+
+        async def _deliver(mode):
+            if hasattr(target, "reply_text"):
+                return await target.reply_text(chunk, parse_mode=mode, reply_markup=markup)
+            elif hasattr(target, "send_message") and chat_id is not None:
+                return await target.send_message(chat_id=chat_id, text=chunk, parse_mode=mode, reply_markup=markup)
+            elif hasattr(target, "send_message"):
+                return await target.send_message(text=chunk, parse_mode=mode, reply_markup=markup)
+            else:
+                raise ValueError(f"Target {type(target)} does not support reply_text or send_message")
+
+        try:
+            msg = await _deliver(parse_mode)
+            sent_messages.append(msg)
+        except Exception as e:
+            logger.warning(f"Failed sending chunk with parse_mode={parse_mode}: {e}. Retrying unformatted...")
+            try:
+                msg = await _deliver(None)
+                sent_messages.append(msg)
+            except Exception as e2:
+                logger.error(f"Failed sending unformatted chunk to Telegram: {e2}")
+                raise
+
+    return sent_messages[-1] if sent_messages else None
+
+
 class TelegramBetBot:
     def __init__(self, ledger: LedgerDB, agent: AgentRouterClient, odds_api: OddsApiClient):
         self.ledger = ledger
@@ -55,6 +132,9 @@ class TelegramBetBot:
         if update.effective_message:
             return update.effective_message
         return None
+
+    async def _send_safe_message(self, target, text: str, parse_mode: str = "Markdown", reply_markup=None, chat_id=None):
+        return await send_safe_telegram_message(target, text, parse_mode=parse_mode, reply_markup=reply_markup, chat_id=chat_id)
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE, message_target=None):
         user_id = update.effective_user.id
@@ -140,7 +220,8 @@ class TelegramBetBot:
             await status_msg.delete()
         except Exception:
             pass
-        await target_msg.reply_text(
+        await self._send_safe_message(
+            target_msg,
             pick_msg,
             parse_mode="Markdown",
             reply_markup=get_pick_action_keyboard(
@@ -414,7 +495,8 @@ class TelegramBetBot:
         except Exception:
             pass
 
-        await reply_to.reply_text(
+        await self._send_safe_message(
+            reply_to,
             f"🔄 *ALTERNATIVE NBA PICK GENERATED!*\n\n{pick_msg}",
             parse_mode="Markdown",
             reply_markup=get_pick_action_keyboard(
@@ -648,7 +730,8 @@ class TelegramBetBot:
                 await status_msg.delete()
             except Exception:
                 pass
-            await query.message.reply_text(
+            await self._send_safe_message(
+                query.message,
                 f"🔀 *SWITCHED TO 2-LEG SAFE COMBO!*\n\n{pick_msg}",
                 parse_mode="Markdown",
                 reply_markup=get_pick_action_keyboard(
@@ -706,7 +789,8 @@ class TelegramBetBot:
                 await status_msg.delete()
             except Exception:
                 pass
-            await query.message.reply_text(
+            await self._send_safe_message(
+                query.message,
                 f"🎯 *SWITCHED TO 1-LEG SOLO LOCK!*\n\n{pick_msg}",
                 parse_mode="Markdown",
                 reply_markup=get_pick_action_keyboard(
