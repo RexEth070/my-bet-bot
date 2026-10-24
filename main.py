@@ -163,6 +163,7 @@ def main():
             from telegram import BotCommand
             await application.bot.set_my_commands([
                 BotCommand("today", "Today's top NBA pick (1-Leg Solo or 2-Leg Combo)"),
+                BotCommand("mode", "Switch ticket style: Auto / 1-Leg Solo / 2-Leg Combo"),
                 BotCommand("reroll", "Generate alternative high-conviction NBA pick"),
                 BotCommand("nba", "Review active NBA totals strategy & parameters"),
                 BotCommand("placed", "Confirm bet placed & start auto-settlement"),
