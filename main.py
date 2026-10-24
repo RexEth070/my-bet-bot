@@ -52,11 +52,13 @@ async def run_cli_demo(ledger: LedgerDB, agent: AgentRouterClient, odds_api: Odd
     print("    • Fixtures sample loaded.")
 
     print("\n[3] Running AI Multi-Factor Analysis via AgentRouter...")
+    preferred_mode = ledger.get_user_mode_preference(demo_user_id)
     prediction = await agent.analyze_and_predict(
         fixtures_summary=fixtures_summary,
         current_day=state.current_day,
         current_balance=state.current_balance,
         currency=config.DEFAULT_CURRENCY,
+        preferred_mode=preferred_mode,
     )
 
     print("\n" + "-" * 50)

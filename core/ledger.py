@@ -93,6 +93,10 @@ class LedgerDB:
                 cursor.execute("ALTER TABLE user_profiles ADD COLUMN preferred_sport TEXT DEFAULT 'basketball'")
             except sqlite3.OperationalError:
                 pass
+            try:
+                cursor.execute("ALTER TABLE user_profiles ADD COLUMN preferred_mode TEXT DEFAULT 'auto'")
+            except sqlite3.OperationalError:
+                pass
 
             conn.commit()
 
@@ -432,6 +436,27 @@ class LedgerDB:
             cursor.execute(
                 "UPDATE user_profiles SET preferred_sport = ?, updated_at = ? WHERE user_id = ?",
                 (sport.lower(), get_current_time_iso(), user_id)
+            )
+            conn.commit()
+
+    def get_user_mode_preference(self, user_id: int) -> str:
+        """Retrieves user's ticket mode preference ('auto', 'solo', or 'combo')."""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT preferred_mode FROM user_profiles WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row["preferred_mode"]:
+                return str(row["preferred_mode"]).lower()
+            return "auto"
+
+    def set_user_mode_preference(self, user_id: int, mode: str):
+        """Saves user's preferred ticket mode ('auto', 'solo', or 'combo')."""
+        clean_mode = mode.lower() if mode.lower() in ("auto", "solo", "combo") else "auto"
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE user_profiles SET preferred_mode = ?, updated_at = ? WHERE user_id = ?",
+                (clean_mode, get_current_time_iso(), user_id)
             )
             conn.commit()
 

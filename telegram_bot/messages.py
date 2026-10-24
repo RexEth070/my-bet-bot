@@ -53,7 +53,10 @@ _{prediction.title}_
 
     is_withdrawal_day = (state.current_day % config.WITHDRAWAL_CYCLE_DAYS == 0)
     withdrawal_badge = "🚨 *WITHDRAWAL DAY TODAY! (50% Cashout after win)*" if is_withdrawal_day else "📈 *Compound Day*"
-    ticket_type_badge = "🏀 *1-LEG SOLO PICK (MAXIMUM CONVICTION)*" if len(prediction.selections) == 1 else "🏀 *2-LEG HIGH-PROBABILITY COMBO*"
+    if len(prediction.selections) == 1:
+        ticket_type_badge = "🏀 *1-LEG SOLO PICK (MAXIMUM CONVICTION — ZERO 2ND-LEG RISK)*"
+    else:
+        ticket_type_badge = "🏀 *2-LEG HIGH-PROBABILITY COMBO (CUSHIONED ALTERNATE ACCUMULATOR)*"
 
     selections_text = ""
     for idx, s in enumerate(prediction.selections, 1):
@@ -383,4 +386,31 @@ def format_memory_cleared_message() -> str:
 
 Tap *🎯 Today's Pick* or type `/today` to generate your fresh Day 1 pick!
 """
+
+
+def format_mode_selection_message(current_mode: str = "auto") -> str:
+    """Explains and formats ticket structure configuration."""
+    mode_name = {
+        "solo": "🎯 1-Leg Solo Lock (1.50 - 1.60)",
+        "combo": "🔀 2-Leg Safe Combo (1.50 - 1.80)",
+        "auto": "⚖️ Auto-Balanced (Daily Smart Balance)",
+    }.get((current_mode or "auto").lower(), "⚖️ Auto-Balanced")
+
+    return f"""⚙️ *TICKET FORMAT & STRUCTURE SETTINGS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Active Preference: *{mode_name}*
+
+💡 *Available Strategies:*
+• *🎯 1-Leg Solo Lock (1.50 - 1.60 Odds):*
+  Focuses 100% of capital on a single heavily-rated NBA line. Completely eliminates the risk of a second leg ruining your compound cycle!
+
+• *🔀 2-Leg Safe Combo (1.50 - 1.80 Combined Odds):*
+  Picks two ultra-conservative lines (1.20 - 1.45 individual odds) with +10 to +16 point safety buffers from distinct matches that multiply safely together.
+
+• *⚖️ Auto-Balanced Mode:*
+  The engine automatically checks market quality each day, rotating between top-ranked Solo locks and deep-cushion 2-Leg Combos.
+
+_Select your preference below or use the 🔀 toggle directly on any active pick:_
+"""
+
 

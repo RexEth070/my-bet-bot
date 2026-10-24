@@ -300,10 +300,18 @@ class NBAIntelService:
 
     def _find_team_key(self, team_name: str) -> Optional[str]:
         """Maps any team string (e.g. 'Boston Celtics', 'BOS', 'Celtics') to internal key."""
-        t_lower = team_name.lower()
-        for key in NBA_TEAM_METRICS:
-            if key in t_lower:
+        if not team_name:
+            return None
+        t_lower = team_name.lower().strip()
+        # 1. Exact match on official franchise names
+        for key, m in NBA_TEAM_METRICS.items():
+            if m["name"].lower() == t_lower:
                 return key
+        # 2. Word boundary search, prioritizing longest keys first to prevent 'nets' in 'hornets'
+        for key in sorted(NBA_TEAM_METRICS.keys(), key=len, reverse=True):
+            if re.search(rf"\b{re.escape(key)}\b", t_lower):
+                return key
+        # 3. Partial substring fallback
         for key, m in NBA_TEAM_METRICS.items():
             if m["name"].lower() in t_lower or t_lower in m["name"].lower():
                 return key
@@ -842,6 +850,18 @@ class NBAIntelService:
             },
         ]
 
+        # Determine which option is active on the current ticket/market
+        effective_mkt = (current_market or market or "").strip()
+        effective_sel = (current_selection or selection or "").strip()
+        mkt_l = effective_mkt.lower()
+        sel_l = effective_sel.lower()
+        if any(k in mkt_l or k in sel_l for k in ["winner", "moneyline", "to win", "ml"]):
+            ticket_opt_num = 3
+        elif any(k in mkt_l or k in sel_l for k in ["1st half", "first half", "ht"]):
+            ticket_opt_num = 2
+        else:
+            ticket_opt_num = 1
+
         options.sort(key=lambda x: x["rating_pct"], reverse=True)
         for rank, opt in enumerate(options, 1):
             opt["rank"] = rank
@@ -856,11 +876,29 @@ class NBAIntelService:
             f"because: {best_opt['rationale']}"
         )
 
-        matrix_lines = [
-            f"🥇 Option {best_opt['option_number']} [{best_opt['market_name']}]: *{best_opt['rating_pct']}% Rating* (SELECTED — #1 Optimal Pick)",
-            f"🥈 Option {second_opt['option_number']} [{second_opt['market_name']}]: {second_opt['rating_pct']}% Rating ({second_opt['safety_cushion']})",
-            f"🥉 Option {third_opt['option_number']} [{third_opt['market_name']}]: {third_opt['rating_pct']}% Rating ({third_opt['safety_cushion']})",
-        ]
+        matrix_lines = []
+        medals = ["🥇", "🥈", "🥉"]
+        for idx, opt in enumerate(options):
+            med = medals[idx] if idx < len(medals) else "•"
+            opt_num = opt["option_number"]
+            mkt_name = opt["market_name"]
+            rating = opt["rating_pct"]
+            cushion_str = opt["safety_cushion"]
+
+            if opt_num == best_opt["option_number"] and opt_num == ticket_opt_num:
+                status = "(SELECTED — #1 Optimal Pick)"
+                line_str = f"{med} Option {opt_num} [{mkt_name}]: *{rating}% Rating* {status}"
+            elif opt_num == ticket_opt_num:
+                status = f"({cushion_str}) (SELECTED ON TICKET)"
+                line_str = f"{med} Option {opt_num} [{mkt_name}]: {rating}% Rating {status}"
+            elif opt_num == best_opt["option_number"]:
+                extra_note = " — Available in 2-Leg Combo" if opt_num == 3 else ""
+                status = f"({cushion_str}) (#1 Audit Rank{extra_note})"
+                line_str = f"{med} Option {opt_num} [{mkt_name}]: *{rating}% Rating* {status}"
+            else:
+                line_str = f"{med} Option {opt_num} [{mkt_name}]: {rating}% Rating ({cushion_str})"
+
+            matrix_lines.append(line_str)
 
         return {
             "options": options,
@@ -868,6 +906,8 @@ class NBAIntelService:
             "best_option_market": best_opt["market_name"],
             "best_option_pick": best_opt["recommended_pick"],
             "best_option_rating": best_opt["rating_pct"],
+            "ticket_option_number": ticket_opt_num,
+            "is_ticket_audit_winner": (ticket_opt_num == best_opt["option_number"]),
             "verdict_summary": verdict_summary,
             "matrix_lines": matrix_lines,
             "formatted_matrix": "\n".join(matrix_lines),
@@ -888,7 +928,9 @@ class NBAIntelService:
         proj = self.calculate_matchup_projections(home, away)
         matchup_intel = self.get_matchup_intel(home, away)
         three_way = self.rate_and_compare_three_options(fixture, market, selection, odds)
-        target_text = f"{market} {selection}".lower()
+        sel_clean = (selection or "").strip().lower()
+        mkt_clean = (market or "").strip().lower()
+        target_text = f"{mkt_clean} {sel_clean}"
 
         clean_search_text = re.sub(r"\b1st\b", "", target_text)
         num_match = re.search(r"(?:total=|\bover\s*|\bunder\s*)?(\d{2,3}(?:\.\d+)?)", clean_search_text)
@@ -897,9 +939,14 @@ class NBAIntelService:
         line_num = float(num_match.group(1)) if num_match else 0.0
 
         is_1st_half = any(k in target_text for k in ["1st half", "first half", "ht"])
-        is_over = bool(re.search(r"\bover\b", target_text))
-        is_under = bool(re.search(r"\bunder\b", target_text))
-        is_winner = any(k in target_text for k in ["winner", "moneyline", "to win", "ml"])
+        is_winner = any(k in mkt_clean or k in sel_clean for k in ["winner", "moneyline", "to win", "ml"])
+
+        # Strictly determine Under vs Over from selection first (market name contains 'Over/Under' which causes false positives)
+        is_under = bool(re.search(r"\bunder\b", sel_clean))
+        is_over = bool(re.search(r"\bover\b", sel_clean))
+        if not is_under and not is_over:
+            is_under = bool(re.search(r"\bunder\b", mkt_clean))
+            is_over = bool(re.search(r"\bover\b", mkt_clean))
 
         # -------------------------------------------------------------
         # Branch A: Winner (incl. Overtime) with 15-Up Early Payout
@@ -986,6 +1033,8 @@ class NBAIntelService:
                 "three_way_verdict": three_way["verdict_summary"],
                 "three_way_options": three_way["options"],
                 "best_option_number": three_way["best_option_number"],
+                "candidate_option_number": 3,
+                "is_audit_winner": (three_way["best_option_number"] == 3),
             }
 
         # -------------------------------------------------------------
@@ -994,22 +1043,24 @@ class NBAIntelService:
         expected_pts = proj["projected_1st_half_pts"] if is_1st_half else proj["projected_total_pts"]
 
         cushion = 0.0
-        if is_over and line_num > 0:
-            cushion = round(expected_pts - line_num, 1)
-        elif is_under and line_num > 0:
+        if is_under and line_num > 0:
             cushion = round(line_num - expected_pts, 1)
+        elif is_over and line_num > 0:
+            cushion = round(expected_pts - line_num, 1)
 
         # Baseline win probability estimation based on cushion margin
-        if cushion >= 14.0:
+        # For 1st half totals, an 8pt buffer is equivalent to ~12-14pt full-game buffer
+        eff_cushion = cushion * 1.4 if is_1st_half else cushion
+        if eff_cushion >= 14.0:
             base_prob = 98.6
-        elif cushion >= 11.0:
+        elif eff_cushion >= 11.0:
             base_prob = 97.8
-        elif cushion >= 8.0:
+        elif eff_cushion >= 8.0:
             base_prob = 96.0
-        elif cushion >= 5.0:
+        elif eff_cushion >= 5.0:
             base_prob = 93.0
         else:
-            base_prob = max(80.0, 88.0 + cushion)
+            base_prob = max(80.0, 88.0 + eff_cushion)
 
         # -------------------------------------------------------------
         # Convergence Boost: H2H, Last 10 Matches & Player Stats Alignment
@@ -1019,15 +1070,7 @@ class NBAIntelService:
         h_l10 = matchup_intel["home_l10"]
         a_l10 = matchup_intel["away_l10"]
 
-        if is_over:
-            # Over convergence checks
-            if h_l10["over_pct"] >= 70.0 and a_l10["over_pct"] >= 70.0:
-                convergence_boost += 0.5
-            if h2h_data["h2h_over_pct"] >= 70.0:
-                convergence_boost += 0.4
-            if not matchup_intel["star_absence_notes"]:
-                convergence_boost += 0.3  # All star scoring engines active
-        elif is_under:
+        if is_under:
             # Under convergence checks
             if h_l10["under_pct"] >= 60.0 and a_l10["under_pct"] >= 60.0:
                 convergence_boost += 0.5
@@ -1035,9 +1078,19 @@ class NBAIntelService:
                 convergence_boost += 0.4
             if matchup_intel["star_absence_notes"]:
                 convergence_boost += 0.4  # Key scorers missing favors under
+        elif is_over:
+            # Over convergence checks
+            if h_l10["over_pct"] >= 70.0 and a_l10["over_pct"] >= 70.0:
+                convergence_boost += 0.5
+            if h2h_data["h2h_over_pct"] >= 70.0:
+                convergence_boost += 0.4
+            if not matchup_intel["star_absence_notes"]:
+                convergence_boost += 0.3  # All star scoring engines active
 
         final_win_prob = round(min(99.4, base_prob + convergence_boost), 1)
-        is_solo_candidate = (1.500 <= odds <= 1.600) and (cushion >= 10.0 or final_win_prob >= 98.0)
+        cand_opt = 2 if is_1st_half else 1
+        is_audit_winner = (three_way["best_option_number"] == cand_opt)
+        is_solo_candidate = (1.500 <= odds <= 1.600) and (eff_cushion >= 8.0 or final_win_prob >= 98.0) and (cushion > 0)
 
         return {
             "projected_pts": expected_pts,
@@ -1056,4 +1109,6 @@ class NBAIntelService:
             "three_way_verdict": three_way["verdict_summary"],
             "three_way_options": three_way["options"],
             "best_option_number": three_way["best_option_number"],
+            "candidate_option_number": cand_opt,
+            "is_audit_winner": is_audit_winner,
         }

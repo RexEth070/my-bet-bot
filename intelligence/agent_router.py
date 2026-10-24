@@ -63,11 +63,12 @@ class AgentRouterClient:
         current_balance: float,
         currency: str = "NGN",
         exclude_fixtures: Optional[List[str]] = None,
+        preferred_mode: Optional[str] = "auto",
     ) -> AIPrediction:
         """Sends match data to LLM via AgentRouter and returns vetted pick."""
         if not self.api_key or "your_" in self.api_key:
             logger.warning("No valid AGENTROUTER_API_KEY configured. Returning calibrated test pick.")
-            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures)
+            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -144,13 +145,13 @@ class AgentRouterClient:
                     if pred.recommended_action == "BET" and len(pred.selections) in (1, 2):
                         return pred
                     logger.warning(f"Parsed prediction did not meet strict NBA totals 1/2-leg criteria ({pred.title}). Falling back to live vetted pick.")
-                    return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures)
+                    return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
 
                 logger.info("Using instant live-vetted fallback pick.")
-                return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures)
+                return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
         except Exception as e:
             logger.warning(f"AgentRouter LLM response delayed/failed ({e}) — using live-vetted high-conviction fallback.")
-            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures)
+            return self._generate_fallback_pick(current_day, current_balance, fixtures_summary=fixtures_summary, exclude_fixtures=exclude_fixtures, preferred_mode=preferred_mode)
 
     def _generate_fallback_pick(
         self,
@@ -158,154 +159,170 @@ class AgentRouterClient:
         current_balance: float,
         fixtures_summary: str = "",
         exclude_fixtures: Optional[List[str]] = None,
+        preferred_mode: Optional[str] = "auto",
     ) -> AIPrediction:
-        """Generates an ultra-safe 1-leg solo pick or 2-leg combo from live vetted NBA Over/Under options."""
-        selections: List[MatchSelection] = []
+        """Generates a high-conviction 1-leg solo lock or 2-leg combo ticket with balanced market diversity."""
         exclude_clean = [clean_team_name(x).lower() for x in (exclude_fixtures or []) if x]
-        seen_fixtures = set()
+        mode = (preferred_mode or "auto").lower()
 
+        parsed_candidates = []
         if fixtures_summary:
             pattern = re.compile(
                 r'\[(NBA|BASKETBALL)\s*-\s*([^\]]+)\]\s*([^|]+)\|\s*Market:\s*([^|]+)\|\s*Pick:\s*([^@]+)@\s*([0-9.]+)',
                 re.IGNORECASE
             )
             matches = pattern.findall(fixtures_summary)
-            if matches:
-                # Check if there is an exceptional single leg with odds 1.50 - 1.60 (99% win-rate solo candidate)
-                for sport, tourn, fixture, mkt, sel, odds_str in matches:
-                    clean_fix = fixture.strip()
-                    fix_lower = clean_fix.lower()
-                    if any(ex in fix_lower or fix_lower in ex for ex in exclude_clean):
-                        continue
-                    try:
-                        odds_val = float(odds_str.strip())
-                    except ValueError:
-                        continue
-                    clean_mkt = mkt.strip()
-                    clean_sel = sel.strip()
-                    mkt_lower = clean_mkt.lower()
-                    sel_lower = clean_sel.lower()
-                    is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
-                    is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
-                    is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
+            for sport, tourn, fixture, mkt, sel, odds_str in matches:
+                clean_fix = fixture.strip()
+                fix_lower = clean_fix.lower()
+                if any(ex in fix_lower or fix_lower in ex for ex in exclude_clean):
+                    continue
+                try:
+                    odds_val = float(odds_str.strip())
+                except ValueError:
+                    continue
+                clean_mkt = mkt.strip()
+                clean_sel = sel.strip()
+                mkt_lower = clean_mkt.lower()
+                sel_lower = clean_sel.lower()
+                is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
+                is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
+                is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
 
-                    if 1.50 <= odds_val <= 1.60 and (is_ou_market or is_win_market) and not is_forbidden:
-                        team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
-                        is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
-                        why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
-                        edge_res = {}
-                        try:
-                            from data_sources.nba_intel import NBAIntelService
-                            nba_service = NBAIntelService()
-                            edge_res = nba_service.evaluate_line_edge(clean_fix, clean_mkt, clean_sel, odds_val)
-                            cushion = edge_res.get("cushion_pts", 0)
-                            win_p = edge_res.get("win_probability_pct", 98.5)
-                            h2h_s = edge_res.get("h2h_summary", "")
-                            stars_s = edge_res.get("player_spotlight", "")
-                            if cushion > 0:
-                                why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup (+{cushion:.1f} pt cushion, {win_p:.1f}% win prob). H2H: {h2h_s}. Stars: {stars_s}."
-                        except Exception:
-                            pass
+                if not (is_ou_market or is_win_market) or is_forbidden:
+                    continue
+                if odds_val < 1.20 or odds_val > 1.60:
+                    continue
 
-                        three_verdict = edge_res.get("three_way_verdict")
-                        if three_verdict:
-                            why_opt = f"3-Way Audit Verdict: {three_verdict}"
-                        elif is_win_market:
-                            why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
-                        elif is_1st_half:
-                            why_opt = "1-Leg Solo Ticket (1st Half Over/Under) cashes at halftime, completely bypassing 4th-quarter garbage time."
-                        else:
-                            why_opt = "1-Leg Solo Ticket with odds >= 1.50 meets the daily compound target while completely eliminating 2nd leg risk."
+                team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
+                is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
+                why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
+                edge_res = {}
+                try:
+                    from data_sources.nba_intel import NBAIntelService
+                    nba_service = NBAIntelService()
+                    edge_res = nba_service.evaluate_line_edge(clean_fix, clean_mkt, clean_sel, odds_val)
+                    cushion = edge_res.get("cushion_pts", 0.0)
+                    win_p = edge_res.get("win_probability_pct", 95.0)
+                    h2h_s = edge_res.get("h2h_summary", "")
+                    stars_s = edge_res.get("player_spotlight", "")
+                    if cushion > 0:
+                        why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup (+{cushion:.1f} pt cushion, {win_p:.1f}% win prob). H2H: {h2h_s}. Stars: {stars_s}."
+                except Exception:
+                    cushion = 0.0
+                    win_p = 95.0
 
-                        selections.append(MatchSelection(
-                            fixture=clean_fix,
-                            sport="basketball",
-                            market=clean_mkt,
-                            selection=clean_sel,
-                            odds=odds_val,
-                            commence_time="Today",
-                            is_2up_eligible=bool(is_win_market),
-                            early_payout_rule="15-Up" if is_win_market else None,
-                            why_picked_club=why_club,
-                            why_best_option=why_opt,
-                        ))
-                        break
+                three_verdict = edge_res.get("three_way_verdict")
+                if three_verdict:
+                    why_opt = f"3-Way Audit Verdict: {three_verdict}"
+                elif is_win_market:
+                    why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
+                elif is_1st_half:
+                    why_opt = f"1st Half {'Under' if 'under' in sel_lower else 'Over'} provides early security cashing at halftime without 4th-quarter blowout volatility."
+                else:
+                    why_opt = "Over/Under Total Points (incl. Overtime) gives full cushion with free overtime points protection."
 
-                # If no 1.50-1.60 solo leg found, collect 2 safe legs (1.20 - 1.35)
-                if not selections:
-                    for sport, tourn, fixture, mkt, sel, odds_str in matches:
-                        clean_fix = fixture.strip()
-                        fix_lower = clean_fix.lower()
-                        if any(ex in fix_lower or fix_lower in ex for ex in exclude_clean):
-                            continue
-                        if clean_fix in seen_fixtures:
-                            continue
-                        try:
-                            odds_val = float(odds_str.strip())
-                        except ValueError:
-                            continue
-                        clean_mkt = mkt.strip()
-                        clean_sel = sel.strip()
-                        mkt_lower = clean_mkt.lower()
-                        sel_lower = clean_sel.lower()
-                        is_ou_market = any(k in mkt_lower or k in sel_lower for k in ["over", "under", "total"])
-                        is_win_market = any(k in mkt_lower or k in sel_lower for k in ["winner", "moneyline", "to win"])
-                        is_forbidden = any(k in mkt_lower for k in ["spread", "handicap", "1x2", "goal", "btts"])
+                m_sel = MatchSelection(
+                    fixture=clean_fix,
+                    sport="basketball",
+                    market=clean_mkt,
+                    selection=clean_sel,
+                    odds=odds_val,
+                    commence_time="Today",
+                    is_2up_eligible=bool(is_win_market),
+                    early_payout_rule="15-Up" if is_win_market else None,
+                    why_picked_club=why_club,
+                    why_best_option=why_opt,
+                )
+                cand_opt = edge_res.get("candidate_option_number") or (3 if is_win_market else (2 if is_1st_half else 1))
+                is_audit_winner = edge_res.get("is_audit_winner", False)
 
-                        if 1.20 <= odds_val <= 1.60 and (is_ou_market or is_win_market) and not is_forbidden:
-                            team_lead = clean_fix.split(" vs ")[0] if " vs " in clean_fix else clean_fix
-                            is_1st_half = any(k in mkt_lower or k in sel_lower for k in ["1st half", "first half", "ht"])
-                            why_club = f"{team_lead} advanced rating differential indicates high statistical dominance in this matchup."
-                            edge_res = {}
-                            try:
-                                from data_sources.nba_intel import NBAIntelService
-                                nba_service = NBAIntelService()
-                                edge_res = nba_service.evaluate_line_edge(clean_fix, clean_mkt, clean_sel, odds_val)
-                                cushion = edge_res.get("cushion_pts", 0)
-                                win_p = edge_res.get("win_probability_pct", 98.5)
-                                h2h_s = edge_res.get("h2h_summary", "")
-                                stars_s = edge_res.get("player_spotlight", "")
-                                if cushion > 0:
-                                    why_club = f"{team_lead} operates in a {edge_res.get('pace_tier', 'BALANCED')} tempo matchup (+{cushion:.1f} pt cushion, {win_p:.1f}% win prob). H2H: {h2h_s}. Stars: {stars_s}."
-                            except Exception:
-                                pass
+                parsed_candidates.append({
+                    "fixture": clean_fix,
+                    "market": clean_mkt,
+                    "selection": clean_sel,
+                    "odds": odds_val,
+                    "cushion": cushion,
+                    "win_p": win_p,
+                    "candidate_option": cand_opt,
+                    "is_audit_winner": is_audit_winner,
+                    "is_solo": edge_res.get("is_solo_candidate", False) or (1.50 <= odds_val <= 1.60 and cushion >= 5.0 and is_audit_winner),
+                    "is_win_market": is_win_market,
+                    "selection_obj": m_sel,
+                })
 
-                            three_verdict = edge_res.get("three_way_verdict")
-                            if three_verdict:
-                                why_opt = f"3-Way Audit Verdict: {three_verdict}"
-                            elif is_win_market:
-                                why_opt = "Winner (incl. Overtime) with 15-Up Early Payout: Immediate full payout settlement as soon as team leads by 15+ points, completely shielding against 4th-quarter comebacks."
-                            elif is_1st_half:
-                                why_opt = "1st Half Over/Under provides early security, avoiding 4th-quarter garbage time."
-                            else:
-                                why_opt = "Over/Under Total Points (incl. Overtime) gives full cushion with free overtime points protection."
+        # Track 1: Best 1-Leg Solo Candidate (1.50 <= odds <= 1.60 and positive cushion)
+        solo_candidates = [c for c in parsed_candidates if 1.50 <= c["odds"] <= 1.60 and c["cushion"] > 0]
+        if not solo_candidates:
+            solo_candidates = [c for c in parsed_candidates if 1.50 <= c["odds"] <= 1.60]
+        # Prioritize true audit winners, then win probability and safety cushion
+        solo_candidates.sort(key=lambda x: (x["is_audit_winner"], x["win_p"], x["cushion"]), reverse=True)
+        best_solo = [solo_candidates[0]["selection_obj"]] if solo_candidates else None
 
-                            selections.append(MatchSelection(
-                                fixture=clean_fix,
-                                sport="basketball",
-                                market=clean_mkt,
-                                selection=clean_sel,
-                                odds=odds_val,
-                                commence_time="Today",
-                                is_2up_eligible=bool(is_win_market),
-                                early_payout_rule="15-Up" if is_win_market else None,
-                                why_picked_club=why_club,
-                                why_best_option=why_opt,
-                            ))
-                            seen_fixtures.add(clean_fix)
-                            if len(selections) == 2:
-                                break
+        # Track 2: Best 2-Leg Combination Candidate (distinct fixtures, combined odds 1.50 - 1.80)
+        combo_legs = [c for c in parsed_candidates if 1.20 <= c["odds"] <= 1.45 and c["cushion"] > 0]
+        if len(combo_legs) < 2:
+            combo_legs = [c for c in parsed_candidates if 1.20 <= c["odds"] <= 1.45]
+        best_combo = None
+        best_combo_score = -999.0
 
-        # If not enough distinct live matches found, use calibrated 1-leg solo and 2-leg combo presets
+        for i in range(len(combo_legs)):
+            for j in range(i + 1, len(combo_legs)):
+                c1 = combo_legs[i]
+                c2 = combo_legs[j]
+                if c1["fixture"] == c2["fixture"]:
+                    continue
+                comb = round(c1["odds"] * c2["odds"], 2)
+                if 1.50 <= comb <= 1.80:
+                    # Preference score incorporates win probabilities, cushions, audit-winner status, and market diversity
+                    diversity_bonus = 2.0 if (c1["is_win_market"] != c2["is_win_market"]) else 0.0
+                    audit_bonus = (3.0 if c1["is_audit_winner"] else 0.0) + (3.0 if c2["is_audit_winner"] else 0.0)
+                    score = (c1["win_p"] + c2["win_p"]) + (c1["cushion"] + c2["cushion"]) * 0.2 + diversity_bonus + audit_bonus
+                    if score > best_combo_score:
+                        best_combo_score = score
+                        best_combo = [c1["selection_obj"], c2["selection_obj"]]
+
+        # Select according to preferred_mode
+        selections = []
+        if mode == "solo":
+            selections = best_solo or best_combo or []
+        elif mode == "combo":
+            selections = best_combo or best_solo or []
+        else:  # "auto" (Conviction-First Auto-Switch)
+            if best_solo and best_combo:
+                # Assess conviction of both setups
+                solo_win_p = solo_candidates[0]["win_p"] if solo_candidates else 95.0
+                solo_is_audit_winner = solo_candidates[0]["is_audit_winner"] if solo_candidates else False
+
+                combo_has_option3_winner = any(
+                    (s.early_payout_rule == "15-Up" or "winner" in s.market.lower()) for s in best_combo
+                )
+
+                # If combo contains a 99%+ Option 3 Winner lock (e.g. Cleveland Cavaliers (To Win) with 15-Up),
+                # or if the solo candidate is NOT an audit winner while combo legs are:
+                if combo_has_option3_winner or not solo_is_audit_winner:
+                    selections = best_combo
+                elif solo_is_audit_winner and solo_win_p >= 98.5:
+                    # Elite 1-leg solo lock with zero 2nd-leg risk
+                    selections = best_solo
+                else:
+                    # Both tracks offer high audit-winner conviction: rotate cleanly based on day
+                    selections = best_combo if current_day % 2 == 0 else best_solo
+            elif best_combo:
+                selections = best_combo
+            elif best_solo:
+                selections = best_solo
+
+        # Fallback to curated presets if live matches are insufficient
         if len(selections) not in (1, 2):
             preset_options = [
-                # Option 1: 1-Leg Solo Pick (Over/Under Total Points incl. Overtime @ 1.55 with 99% win-rate rating)
+                # Option 1: 1-Leg Solo Pick
                 [
                     MatchSelection(
                         fixture="Boston Celtics vs Charlotte Hornets",
                         sport="basketball",
                         market="Over/Under Total Points (incl. Overtime)",
-                        selection="Over 212.5 Points (incl. OT)",
+                        selection="Over 208.5 Points (incl. OT)",
                         odds=1.55,
                         commence_time="Today",
                         early_payout_rule=None,
@@ -338,22 +355,34 @@ class AgentRouterClient:
                         why_best_option="Over/Under Total Points (incl. OT) provides a massive 15-point mathematical buffer above expected game total.",
                     ),
                 ],
-                # Option 3: 1-Leg Solo Pick (First Half Over/Under @ 1.54 with 99% win-rate rating)
+                # Option 3: 1-Leg Solo Pick (First Half Under)
                 [
                     MatchSelection(
                         fixture="Dallas Mavericks vs Brooklyn Nets",
                         sport="basketball",
                         market="First Half Over/Under",
-                        selection="Over 107.5 Points (1st Half)",
+                        selection="Under 121.5 Points (1st Half)",
                         odds=1.54,
                         commence_time="Today",
                         early_payout_rule=None,
-                        why_picked_club="High-octane perimeter matchup with both squads averaging over 38 three-point attempts per game.",
-                        why_best_option="1-Leg Solo Pick: Cashes at halftime with 1.54 odds, eliminating second-half variability.",
+                        why_picked_club="Halfcourt perimeter grind with high foul resistance in opening quarters.",
+                        why_best_option="1-Leg Solo Pick: Cashes at halftime with 1.54 odds on Under, eliminating end-of-game foul shooting.",
                     ),
                 ],
-                # Option 4: Alternative 2-Leg Combination Ticket (Combined odds: 1.61)
+                # Option 4: Alternative 2-Leg Combination Ticket (Winner 15-Up + Total)
                 [
+                    MatchSelection(
+                        fixture="Cleveland Cavaliers vs Detroit Pistons",
+                        sport="basketball",
+                        market="Winner (incl. Overtime)",
+                        selection="Cleveland Cavaliers (To Win)",
+                        odds=1.24,
+                        commence_time="Today",
+                        is_2up_eligible=True,
+                        early_payout_rule="15-Up",
+                        why_picked_club="Cavaliers starting five shoots 51.4% eFG with +12.4 scoring advantage.",
+                        why_best_option="15-Up Early Payout: Settle as full WIN as soon as Cavaliers lead by 15+ points.",
+                    ),
                     MatchSelection(
                         fixture="Minnesota Timberwolves vs Washington Wizards",
                         sport="basketball",
@@ -362,33 +391,26 @@ class AgentRouterClient:
                         odds=1.29,
                         commence_time="Today",
                         early_payout_rule=None,
-                        why_picked_club="Timberwolves elite defensive rim protection limits transition buckets, dragging 1st half scoring pace down to halfcourt grind.",
+                        why_picked_club="Timberwolves elite defensive rim protection limits transition buckets.",
                         why_best_option="First Half Under provides high variance insulation against end-of-game foul shooting.",
-                    ),
-                    MatchSelection(
-                        fixture="Cleveland Cavaliers vs Detroit Pistons",
-                        sport="basketball",
-                        market="Over/Under Total Points (incl. Overtime)",
-                        selection="Over 210.5 Points (incl. OT)",
-                        odds=1.25,
-                        commence_time="Today",
-                        early_payout_rule=None,
-                        why_picked_club="Cavaliers starting five shoots 51.4% eFG at Rocket Mortgage FieldHouse.",
-                        why_best_option="Over/Under Total Points (incl. Overtime) gives heavy scoring safety margin with OT protection.",
                     ),
                 ],
             ]
 
-            # Find a preset option where none of the fixtures are in exclude_clean
-            selected_option = None
-            for opt in preset_options:
-                if not any(any(ex in s.fixture.lower() or s.fixture.lower() in ex for ex in exclude_clean) for s in opt):
-                    selected_option = opt
-                    break
-            if not selected_option:
-                selected_option = preset_options[0]
+            filtered_presets = [
+                opt for opt in preset_options
+                if not any(any(ex in s.fixture.lower() or s.fixture.lower() in ex for ex in exclude_clean) for s in opt)
+            ]
+            if not filtered_presets:
+                filtered_presets = preset_options
 
-            selections = selected_option
+            if mode == "solo":
+                selections = next((opt for opt in filtered_presets if len(opt) == 1), filtered_presets[0])
+            elif mode == "combo":
+                selections = next((opt for opt in filtered_presets if len(opt) == 2), filtered_presets[0])
+            else:
+                idx = (current_day - 1) % len(filtered_presets)
+                selections = filtered_presets[idx]
 
         if len(selections) == 1:
             comb_odds = round(selections[0].odds, 2)

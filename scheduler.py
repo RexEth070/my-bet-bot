@@ -44,11 +44,13 @@ def setup_scheduler(
             state = ledger.get_or_create_user(user_id)
             fixtures_data = await odds_api.get_upcoming_fixtures_summary()
 
+            preferred_mode = ledger.get_user_mode_preference(user_id)
             prediction = await agent.analyze_and_predict(
                 fixtures_summary=fixtures_data,
                 current_day=state.current_day,
                 current_balance=state.current_balance,
                 currency=config.DEFAULT_CURRENCY,
+                preferred_mode=preferred_mode,
             )
 
             # Automatically book on SportyBet to generate live booking code & 1-click URL
@@ -88,6 +90,7 @@ def setup_scheduler(
                     sport=primary_sport,
                     booking_url=prediction.booking_url,
                     booking_code=prediction.booking_code,
+                    legs_count=len(prediction.selections),
                 ),
             )
             logger.info(f"Morning pick successfully dispatched to user {user_id}")

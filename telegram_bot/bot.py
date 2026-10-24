@@ -16,7 +16,12 @@ from core.ledger import LedgerDB
 from core.models import BetRecord
 from intelligence.agent_router import AgentRouterClient
 from data_sources.odds_api import OddsApiClient
-from telegram_bot.keyboards import get_pick_action_keyboard, get_main_reply_keyboard, get_sport_selector_keyboard
+from telegram_bot.keyboards import (
+    get_pick_action_keyboard,
+    get_main_reply_keyboard,
+    get_sport_selector_keyboard,
+    get_mode_selector_keyboard,
+)
 from telegram_bot import messages
 from intelligence.postmortem import analyze_loss
 from core.auto_settler import AutoSettler
@@ -68,6 +73,7 @@ class TelegramBetBot:
         status_msg = await update.message.reply_text("⚡ *Selecting today's top winning pick...*", parse_mode="Markdown")
 
         state = self.ledger.get_or_create_user(user_id)
+        preferred_mode = self.ledger.get_user_mode_preference(user_id)
         fixtures_data = await self.odds_api.get_upcoming_fixtures_summary(basketball_limit=60)
 
         # Run AI reasoning
@@ -76,6 +82,7 @@ class TelegramBetBot:
             current_day=state.current_day,
             current_balance=state.current_balance,
             currency=config.DEFAULT_CURRENCY,
+            preferred_mode=preferred_mode,
         )
 
         # Automatically book on SportyBet to generate live booking code & 1-click URL
@@ -122,6 +129,7 @@ class TelegramBetBot:
                 sport=primary_sport,
                 booking_url=prediction.booking_url,
                 booking_code=prediction.booking_code,
+                legs_count=len(prediction.selections),
             ),
         )
 
@@ -287,10 +295,15 @@ class TelegramBetBot:
             return
 
         state = self.ledger.get_or_create_user(user_id)
+        preferred_mode = self.ledger.get_user_mode_preference(user_id)
         proposed = self.ledger.get_proposed_bet(user_id)
         exclude_fixtures = []
         if proposed:
             exclude_fixtures = [f.strip() for f in proposed.event_name.split("+") if f.strip()]
+            # In auto mode, alternate ticket format on reroll for variety
+            if preferred_mode == "auto":
+                prev_legs = len(proposed.selection.split("+"))
+                preferred_mode = "combo" if prev_legs == 1 else "solo"
 
         reply_to = message_target or (update.message or (update.callback_query.message if update.callback_query else None))
         status_msg = await reply_to.reply_text("🔄 *Rerolling an alternative high-conviction NBA pick...*", parse_mode="Markdown")
@@ -307,6 +320,7 @@ class TelegramBetBot:
             current_balance=state.current_balance,
             currency=config.DEFAULT_CURRENCY,
             exclude_fixtures=exclude_fixtures,
+            preferred_mode=preferred_mode,
         )
 
         try:
@@ -352,6 +366,7 @@ class TelegramBetBot:
                 sport=primary_sport,
                 booking_url=prediction.booking_url,
                 booking_code=prediction.booking_code,
+                legs_count=len(prediction.selections),
             ),
         )
 
@@ -377,6 +392,36 @@ class TelegramBetBot:
             reply_markup=get_nba_strategy_keyboard(),
         )
 
+    async def mode_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not self.is_user_allowed(user_id):
+            return
+
+        if context.args and len(context.args) > 0:
+            chosen = context.args[0].lower().strip()
+            if chosen in ("solo", "single", "1"):
+                mode = "solo"
+            elif chosen in ("combo", "parlay", "acca", "2"):
+                mode = "combo"
+            else:
+                mode = "auto"
+            self.ledger.set_user_mode_preference(user_id, mode)
+            await update.message.reply_text(
+                f"✅ *Ticket format updated to:* `{mode.upper()}`\n\n"
+                f"Tap *🎯 Today's Pick* or type `/today` to scan with this format!",
+                parse_mode="Markdown",
+                reply_markup=get_mode_selector_keyboard(mode),
+            )
+            return
+
+        current_mode = self.ledger.get_user_mode_preference(user_id)
+        msg = messages.format_mode_selection_message(current_mode)
+        await update.message.reply_text(
+            msg,
+            parse_mode="Markdown",
+            reply_markup=get_mode_selector_keyboard(current_mode),
+        )
+
     async def clear_all_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
         if not self.is_user_allowed(user_id):
@@ -394,6 +439,7 @@ class TelegramBetBot:
         help_text = f"""ℹ️ *Available Commands & NBA Guide:*
 
 • `/today` — Analyze today's top NBA pick (1-Leg Solo or 2-Leg Combo).
+• `/mode` — Select ticket structure (1-Leg Solo Lock, 2-Leg Combo, or Auto-Balanced).
 • `/reroll` — Reroll and generate a fresh alternative NBA pick.
 • `/stats` — View performance dashboard, win rate %, net profit, and streaks.
 • `/nba` — Review the active NBA Totals Strategy rules & parameters.
@@ -411,7 +457,7 @@ class TelegramBetBot:
 💡 *Strict Rules:*
 • Sport: Strictly NBA Basketball.
 • Markets: Strictly Over/Under (incl. OT) & 1st Half Over/Under.
-• Format: 1-Leg Solo (1.50 - 1.60 odds) or 2-Leg Combo (1.20 - 1.35 each, combined 1.50 - 1.80).
+• Format: 1-Leg Solo (1.50 - 1.60 odds) or 2-Leg Combo (1.20 - 1.45 each, combined 1.50 - 1.80).
 • Max Leg Odds: 1.60 per match.
 """
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -426,6 +472,8 @@ class TelegramBetBot:
             await self.stats_command(update, context)
         elif text in ("🏀 NBA Strategy", "⚙️ Sport Mode"):
             await self.nba_strategy_command(update, context)
+        elif text in ("⚙️ Ticket Mode", "🎯 Ticket Mode"):
+            await self.mode_command(update, context)
         elif text == "📈 30-Day Cycle Plan":
             await self.cycle_command(update, context)
         elif text == "📜 Recent Bets":
@@ -478,6 +526,155 @@ class TelegramBetBot:
 
         elif data.startswith("reroll_pick_"):
             await self.reroll_pick_command(update, context, message_target=query.message)
+
+        elif data.startswith("switch_mode_combo_"):
+            bet_id = int(data.replace("switch_mode_combo_", ""))
+            self.ledger.set_user_mode_preference(user_id, "combo")
+            self.ledger.clear_bet(user_id=user_id, bet_id=bet_id)
+            await query.answer("Switching ticket to 2-Leg Safe Combo...")
+            status_msg = await query.message.reply_text("🔀 *Generating 2-Leg Safe Combo ticket...*", parse_mode="Markdown")
+
+            state = self.ledger.get_or_create_user(user_id)
+            fixtures_data = await self.odds_api.get_upcoming_fixtures_summary(basketball_limit=60, force_refresh=True)
+            prediction = await self.agent.analyze_and_predict(
+                fixtures_summary=fixtures_data,
+                current_day=state.current_day,
+                current_balance=state.current_balance,
+                currency=config.DEFAULT_CURRENCY,
+                preferred_mode="combo",
+            )
+            try:
+                from intelligence.sportybet_service import SportyBetService
+                sporty_service = SportyBetService()
+                prediction = sporty_service.book_prediction(prediction)
+            except Exception as be:
+                logger.warning(f"Could not generate live SportyBet booking code on switch: {be}")
+
+            event_names = " + ".join([s.fixture for s in prediction.selections])
+            market_names = " + ".join([s.market for s in prediction.selections])
+            selection_names = " + ".join([s.selection for s in prediction.selections])
+
+            new_bet = BetRecord(
+                day_number=state.current_day,
+                event_name=event_names,
+                market=market_names,
+                selection=selection_names,
+                odds=prediction.combined_odds,
+                stake=prediction.suggested_stake,
+                potential_return=round(prediction.suggested_stake * prediction.combined_odds, 2),
+                booking_code=prediction.booking_code,
+                booking_url=prediction.booking_url,
+                outcome="PROPOSED",
+            )
+            new_bet_id = self.ledger.record_bet(user_id=user_id, bet=new_bet)
+            pick_msg = messages.format_daily_pick_message(prediction, state)
+            primary_sport = prediction.selections[0].sport if prediction.selections else "basketball"
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await query.message.reply_text(
+                f"🔀 *SWITCHED TO 2-LEG SAFE COMBO!*\n\n{pick_msg}",
+                parse_mode="Markdown",
+                reply_markup=get_pick_action_keyboard(
+                    new_bet_id,
+                    sport=primary_sport,
+                    booking_url=prediction.booking_url,
+                    booking_code=prediction.booking_code,
+                    legs_count=len(prediction.selections),
+                ),
+            )
+
+        elif data.startswith("switch_mode_solo_"):
+            bet_id = int(data.replace("switch_mode_solo_", ""))
+            self.ledger.set_user_mode_preference(user_id, "solo")
+            self.ledger.clear_bet(user_id=user_id, bet_id=bet_id)
+            await query.answer("Switching ticket to 1-Leg Solo Lock...")
+            status_msg = await query.message.reply_text("🎯 *Generating 1-Leg Solo Lock ticket...*", parse_mode="Markdown")
+
+            state = self.ledger.get_or_create_user(user_id)
+            fixtures_data = await self.odds_api.get_upcoming_fixtures_summary(basketball_limit=60, force_refresh=True)
+            prediction = await self.agent.analyze_and_predict(
+                fixtures_summary=fixtures_data,
+                current_day=state.current_day,
+                current_balance=state.current_balance,
+                currency=config.DEFAULT_CURRENCY,
+                preferred_mode="solo",
+            )
+            try:
+                from intelligence.sportybet_service import SportyBetService
+                sporty_service = SportyBetService()
+                prediction = sporty_service.book_prediction(prediction)
+            except Exception as be:
+                logger.warning(f"Could not generate live SportyBet booking code on switch: {be}")
+
+            event_names = " + ".join([s.fixture for s in prediction.selections])
+            market_names = " + ".join([s.market for s in prediction.selections])
+            selection_names = " + ".join([s.selection for s in prediction.selections])
+
+            new_bet = BetRecord(
+                day_number=state.current_day,
+                event_name=event_names,
+                market=market_names,
+                selection=selection_names,
+                odds=prediction.combined_odds,
+                stake=prediction.suggested_stake,
+                potential_return=round(prediction.suggested_stake * prediction.combined_odds, 2),
+                booking_code=prediction.booking_code,
+                booking_url=prediction.booking_url,
+                outcome="PROPOSED",
+            )
+            new_bet_id = self.ledger.record_bet(user_id=user_id, bet=new_bet)
+            pick_msg = messages.format_daily_pick_message(prediction, state)
+            primary_sport = prediction.selections[0].sport if prediction.selections else "basketball"
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await query.message.reply_text(
+                f"🎯 *SWITCHED TO 1-LEG SOLO LOCK!*\n\n{pick_msg}",
+                parse_mode="Markdown",
+                reply_markup=get_pick_action_keyboard(
+                    new_bet_id,
+                    sport=primary_sport,
+                    booking_url=prediction.booking_url,
+                    booking_code=prediction.booking_code,
+                    legs_count=len(prediction.selections),
+                ),
+            )
+
+        elif data == "set_mode_solo":
+            self.ledger.set_user_mode_preference(user_id, "solo")
+            try:
+                await query.edit_message_reply_markup(reply_markup=get_mode_selector_keyboard("solo"))
+            except Exception:
+                pass
+            await query.answer("Ticket format set to 1-Leg Solo Lock (1.50 - 1.60)!", show_alert=True)
+
+        elif data == "set_mode_combo":
+            self.ledger.set_user_mode_preference(user_id, "combo")
+            try:
+                await query.edit_message_reply_markup(reply_markup=get_mode_selector_keyboard("combo"))
+            except Exception:
+                pass
+            await query.answer("Ticket format set to 2-Leg Safe Combo (1.50 - 1.80)!", show_alert=True)
+
+        elif data == "set_mode_auto":
+            self.ledger.set_user_mode_preference(user_id, "auto")
+            try:
+                await query.edit_message_reply_markup(reply_markup=get_mode_selector_keyboard("auto"))
+            except Exception:
+                pass
+            await query.answer("Ticket format set to Auto-Balanced!", show_alert=True)
+
+        elif data == "btn_ticket_mode":
+            current_mode = self.ledger.get_user_mode_preference(user_id)
+            msg = messages.format_mode_selection_message(current_mode)
+            await query.message.reply_text(
+                msg,
+                parse_mode="Markdown",
+                reply_markup=get_mode_selector_keyboard(current_mode),
+            )
 
         elif data.startswith("set_sport_"):
             sport = "basketball"
@@ -571,6 +768,8 @@ def create_bot_application(
     # Commands
     app.add_handler(CommandHandler("start", bot.start_command))
     app.add_handler(CommandHandler("today", bot.today_pick_command))
+    app.add_handler(CommandHandler("mode", bot.mode_command))
+    app.add_handler(CommandHandler("ticketmode", bot.mode_command))
     app.add_handler(CommandHandler("reroll", bot.reroll_pick_command))
     app.add_handler(CommandHandler("alternative", bot.reroll_pick_command))
     app.add_handler(CommandHandler("stats", bot.stats_command))

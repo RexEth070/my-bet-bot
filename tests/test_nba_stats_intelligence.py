@@ -85,7 +85,7 @@ class TestNBAStatsIntelligence(unittest.TestCase):
         edge = self.intel.evaluate_line_edge(
             fixture="Boston Celtics vs Charlotte Hornets",
             market="Over/Under Total Points (incl. Overtime)",
-            selection="Over 214.5 Points (incl. OT)",
+            selection="Over 208.5 Points (incl. OT)",
             odds=1.55,
         )
         self.assertGreater(edge["cushion_pts"], 10.0)

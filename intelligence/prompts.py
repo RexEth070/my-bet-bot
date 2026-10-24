@@ -68,6 +68,9 @@ Before selecting any Over/Under fixture, you must cross-examine it against these
    - Cross-compare the 3 options and pick ONLY the single #1 highest-rated option for that game that gives the 98% - 99% win guarantee!
    - In "why_best_option", you MUST explicitly explain why the chosen option won over the other two options (e.g. "Option 3 [15-Up Winner] selected with 99.2% conviction over Option 1 (97.8%) and Option 2 (96.9%) because the 15-Up Early Lead Payout settles as a full WIN upon a 15-point lead, making the bet 100% immune to 4th-quarter comebacks").
    - In "key_factors", include: "3-Way Option Audit: Option X (XX.X%) ranked #1 ahead of Option Y (YY.Y%) and Option Z (ZZ.Z%)".
+   - CRITICAL OPTION 3 & TICKET FORMAT RULE:
+     • If Option 3 Winner (15-Up Early Payout) ranks #1 with 98.5% - 99.4% conviction (e.g. odds 1.20 - 1.35), you MUST select it! Because individual odds of 1.20 - 1.35 cannot stand alone as a 1.50+ ticket, you MUST structure the ticket as a 2-LEG COMBO (pairing Option 3 with another safe leg at 1.25 - 1.45 to achieve 1.500 - 1.800 combined odds).
+     • NEVER discard a #1 ranked Option 3 Winner and fall back to a 3rd-place Option 2 (1st Half Over/Under) or Option 1 just to force a 1-leg solo ticket! If Option 3 won the audit, PLAY OPTION 3 via a 2-Leg Combo!
 
 CAPITAL PRESERVATION & SELECTION MANDATE:
 Use the provided fixtures, live market odds, form, and team profiles to identify the safest, lowest-volatility 1-LEG SOLO or 2-LEG NBA pick from the provided SportyBet feed.
